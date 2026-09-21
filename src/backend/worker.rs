@@ -3384,8 +3384,12 @@ impl Worker {
         self.polish_poll(message);
         if let Some(quoted) = message.quoted.as_mut() {
             let sender = self.canonical_str(&quoted.sender);
-            if sender != quoted.sender || quoted.sender_name.is_none() {
-                quoted.sender_name = self.name_for(&sender);
+            // Contact names can arrive after the quoted message was archived.
+            // Refresh the label even when the canonical sender id is unchanged;
+            // otherwise a previously stored phone number remains stuck in the
+            // quote forever.
+            quoted.sender_name = self.name_for(&sender);
+            if sender != quoted.sender {
                 quoted.sender = sender;
             }
             quoted.summary = self.pn_tokens(&quoted.summary);
