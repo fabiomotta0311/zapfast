@@ -77,7 +77,7 @@ Keep the custom executable in a separate directory and launch it with separate W
 source /c/Users/fabio/dev/zapfast-localenv.sh
 cargo build --locked --release
 mkdir -p /c/Users/fabio/ZapFast-split/bin
-cp target/release/zapfast.exe /c/Users/fabio/ZapFast-split/bin/zapfast-split.exe
+cp "$CARGO_TARGET_DIR/release/zapfast.exe" /c/Users/fabio/ZapFast-split/bin/zapfast-split.exe
 ```
 
 Create `C:\Users\fabio\ZapFast-split\run-split.cmd` with:
