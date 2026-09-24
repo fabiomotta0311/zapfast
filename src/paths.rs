@@ -18,6 +18,9 @@ pub struct AppDirs {
 
 impl AppDirs {
     pub fn discover() -> Self {
+        if let Some(root) = std::env::var_os("ZAPFAST_DATA_DIR") {
+            return Self::under(Path::new(&root));
+        }
         match Self::of("zapfast") {
             Some(dirs) => dirs,
             None => {
@@ -50,6 +53,9 @@ impl AppDirs {
     /// Adopts earlier names, newest first, without replacing existing data.
     /// Call only after acquiring the instance guard, and never for demo runs.
     pub fn adopt_previous_names(&self) -> std::io::Result<()> {
+        if std::env::var_os("ZAPFAST_DATA_DIR").is_some() {
+            return Ok(());
+        }
         for name in ["fastsapp", "fastwhatsapp"] {
             if let Some(old) = Self::of(name) {
                 self.adopt(&old)?;

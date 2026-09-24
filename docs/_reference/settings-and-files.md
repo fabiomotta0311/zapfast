@@ -86,6 +86,7 @@ Create `C:\Users\fabio\ZapFast-split\run-split.cmd` with:
 @echo off
 set "APPDATA=%~dp0data\roaming"
 set "LOCALAPPDATA=%~dp0data\local"
+set "ZAPFAST_DATA_DIR=%~dp0data"
 "%~dp0bin\zapfast-split.exe" %*
 ```
 
