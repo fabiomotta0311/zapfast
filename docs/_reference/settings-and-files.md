@@ -90,4 +90,4 @@ set "ZAPFAST_DATA_DIR=%~dp0data"
 "%~dp0bin\zapfast-split.exe" %*
 ```
 
-Run only `run-split.cmd` for the custom build. The official installation keeps its normal `%APPDATA%` and `%LOCALAPPDATA%` roots, while the test build uses `data\roaming` and `data\local` below `ZapFast-split`. The custom build therefore needs its own phone link and must never be launched against the official data directories.
+Run only `run-split.cmd` for the custom build. The official installation keeps its normal `%APPDATA%` and `%LOCALAPPDATA%` roots, while the test build uses `data\roaming` and `data\local` below `ZapFast-split`. The test binary uses the Vulkan renderer on Windows instead of the OpenGL path. This avoids a known class of hangs caused by third-party GPU overlays intercepting `SwapBuffers`; the official installation is not changed.

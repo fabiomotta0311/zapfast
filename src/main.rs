@@ -425,6 +425,7 @@ fn native_options(demo_persistence: Option<std::path::PathBuf>) -> eframe::Nativ
         persist_window: !demo,
         // Hidden Wayland windows stop receiving frame callbacks, so vsync is
         // only on where the patched winit can report them as occluded.
+        renderer: eframe::Renderer::Wgpu,
         glow_options: eframe::egui_glow::GlowConfiguration {
             vsync: zapfast::vsync::enabled(),
             ..Default::default()

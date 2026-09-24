@@ -38,9 +38,11 @@ serde_json = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 directories = "6"
-# UI framework. glow avoids the larger wgpu dependency.
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
+# UI framework. Keep glow for compatibility and use Vulkan through wgpu on Windows
+# to avoid vendor OpenGL overlays that can stall SwapBuffers.
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "wgpu_no_default_features", "default_fonts", "links", "wayland", "x11", "persistence"] }
 egui = "0.36"
+wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 egui_extras = { version = "0.36", features = ["file", "image", "svg", "webp", "gif"] }
 # Finds system fonts for scripts not covered by Inter. Keep skrifa aligned with
 # epaint to avoid compiling two versions. memmap2 limits font scans to the
