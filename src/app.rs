@@ -367,6 +367,11 @@ pub struct App {
     pub label_editing: Option<(String, String)>,
     /// Label the chat list shows; `None` shows every chat.
     pub label_filter: Option<String>,
+    pub panes: [crate::model::ChatPaneState; 2],
+    pub split: bool,
+    pub focused_pane: usize,
+    pub split_ratio: f32,
+    pub pane_label: Option<String>,
     /// Chats opened from the Unread list, kept there until the filter changes.
     unread_kept: HashSet<ChatId>,
     pub toasts: Vec<Toast>,
@@ -683,6 +688,11 @@ impl App {
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,
             label_filter: None,
+            panes: [Default::default(), Default::default()],
+            split: false,
+            focused_pane: 0,
+            split_ratio: 0.5,
+            pane_label: None,
             unread_kept: HashSet::new(),
             toasts: Vec::new(),
             actions: Vec::new(),
@@ -981,6 +991,37 @@ impl App {
             .filter(|chat| !chat.locked || self.locked_folder_open())
     }
 
+    pub fn split_open(&self) -> bool {
+        self.split && self.page == Page::Chats
+    }
+
+    fn select_pane_label(&mut self, pane: usize, label: Option<String>) {
+        if pane > 1 {
+            return;
+        }
+        self.panes[pane].label = label.clone();
+        if pane == 0 {
+            self.label_filter = label;
+        }
+        self.chat_filter = ChatFilter::All;
+        self.show_archived = false;
+        self.unread_kept.clear();
+    }
+
+    fn open_label_split(&mut self, label: Option<String>) {
+        self.split = true;
+        self.panes[1] = crate::model::ChatPaneState { label, chat: None };
+        self.focused_pane = 1;
+        self.page = Page::Chats;
+    }
+
+    fn close_split(&mut self) {
+        self.split = false;
+        self.panes[1] = Default::default();
+        self.focused_pane = 0;
+        self.open_chat = self.panes[0].chat.clone();
+    }
+
     /// The label with this id, when it still exists.
     pub fn label(&self, id: &str) -> Option<&Label> {
         self.labels.iter().find(|label| label.id == id)
@@ -1036,7 +1077,8 @@ impl App {
             self.search.clear();
             self.search_hits.clear();
         }
-        self.label_filter = label;
+        self.label_filter = label.clone();
+        self.panes[0].label = label;
         self.chat_filter = ChatFilter::All;
         self.show_archived = false;
         self.unread_kept.clear();
@@ -1379,12 +1421,17 @@ impl App {
             .iter()
             .filter(|chat| chat.locked == locked)
             .filter(|chat| locked || chat.archived == self.show_archived || !needle.is_empty())
-            .filter(|chat| match &self.label_filter {
-                // A label lists every chat wearing it, channels included,
-                // because someone put each of them there.
-                _ if !filtering => true,
-                Some(label) => self.chat_wears(chat, label),
-                None => {
+            .filter(|chat| {
+                let label = if self.split_open() {
+                    self.pane_label.as_ref()
+                } else {
+                    self.label_filter.as_ref()
+                };
+                if !filtering {
+                    true
+                } else if let Some(label) = label {
+                    self.chat_wears(chat, label)
+                } else {
                     self.chat_filter.matches(chat)
                         || (self.chat_filter == ChatFilter::Unread
                             && self.unread_kept.contains(&chat.id))
@@ -2534,6 +2581,11 @@ impl App {
         self.emoji_start = None;
         self.mention_start = None;
         self.open_chat = Some(id.clone());
+        if self.split_open() {
+            self.panes[self.focused_pane].chat = Some(id.clone());
+        } else {
+            self.panes[0].chat = Some(id.clone());
+        }
         self.page = Page::Chats;
         self.scroll_to_bottom = true;
         self.at_bottom = true;
@@ -3874,6 +3926,15 @@ impl App {
                 self.unread_kept.clear();
             }
             Action::SelectLabel(label) => self.select_label(label),
+            Action::SelectPaneLabel { pane, label } => self.select_pane_label(pane, label),
+            Action::OpenLabelSplit(label) => self.open_label_split(label),
+            Action::CloseSplit => self.close_split(),
+            Action::FocusPane(pane) => {
+                if self.split {
+                    self.focused_pane = pane.min(1);
+                }
+            }
+            Action::SetSplitRatio(ratio) => self.split_ratio = ratio.clamp(0.25, 0.75),
             Action::SetChatLabels { chat, labels } => {
                 self.backend.send(Command::SetChatLabels { chat, labels });
             }
@@ -5458,6 +5519,45 @@ mod tests {
             .unwrap();
         app.background_frame(&ctx);
         assert!(app.poll_voting.is_empty());
+    }
+
+    #[test]
+    fn split_workspace_keeps_two_independent_panes_and_clamps_divider() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.labels = vec![label("one", "One"), label("two", "Two")];
+        app.apply(Action::SelectLabel(Some("one".into())), &ctx);
+        app.apply(Action::OpenLabelSplit(Some("two".into())), &ctx);
+        assert!(app.split_open());
+        assert_eq!(app.focused_pane, 1);
+        assert_eq!(app.panes[0].label.as_deref(), Some("one"));
+        assert_eq!(app.panes[1].label.as_deref(), Some("two"));
+        app.apply(Action::SetSplitRatio(0.99), &ctx);
+        assert_eq!(app.split_ratio, 0.75);
+        app.apply(Action::FocusPane(0), &ctx);
+        assert_eq!(app.focused_pane, 0);
+        app.apply(Action::CloseSplit, &ctx);
+        assert!(!app.split_open());
+        assert_eq!(app.panes[1], Default::default());
+    }
+
+    #[test]
+    fn visible_chats_use_the_active_pane_label_when_split() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.labels = vec![label("one", "One"), label("two", "Two")];
+        app.chats = vec![
+            labeled("a@s.whatsapp.net", 0, &["one"]),
+            labeled("b@s.whatsapp.net", 0, &["two"]),
+        ];
+        app.apply(Action::OpenLabelSplit(Some("two".into())), &ctx);
+        app.pane_label = Some("two".into());
+        let ids: Vec<_> = app
+            .visible_chats()
+            .into_iter()
+            .map(|chat| chat.id.as_str())
+            .collect();
+        assert_eq!(ids, ["b@s.whatsapp.net"]);
     }
 
     fn label(id: &str, name: &str) -> Label {

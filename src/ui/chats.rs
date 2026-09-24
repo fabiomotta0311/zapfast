@@ -11,20 +11,23 @@ use super::focus::{Stop, TabStop};
 use super::labels;
 use super::widgets;
 
-pub fn show(app: &mut App, ui: &mut egui::Ui) {
+pub fn show(app: &mut App, ui: &mut egui::Ui, pane: usize) {
     let palette = app.palette;
-    let panel = egui::Panel::left("chats")
+    let panel = egui::Panel::left(egui::Id::new(("chats", pane)))
         .resizable(true)
         .default_size(app.settings.sidebar_width)
-        .size_range(if theme::macos_chrome(ui.ctx()) {
+        .size_range(if app.split_open() {
+            180.0..=420.0
+        } else if theme::macos_chrome(ui.ctx()) {
             (theme::traffic_light_inset(ui.ctx()) + 210.0).max(280.0)..=520.0
         } else {
             260.0..=520.0
         })
+        .resizable(!app.split_open())
         .show_separator_line(false)
         .frame(Frame::new().fill(palette.panel).inner_margin(Margin::ZERO));
     let response = panel.show(ui, |ui| {
-        header(app, ui);
+        header(app, ui, pane);
         list(app, ui);
     });
     let width = response.response.rect.width();
@@ -41,9 +44,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     );
 }
 
-fn header(app: &mut App, ui: &mut egui::Ui) {
+fn header(app: &mut App, ui: &mut egui::Ui, pane: usize) {
     if theme::macos_chrome(ui.ctx()) {
-        macos_header(app, ui);
+        macos_header(app, ui, pane);
         return;
     }
     let palette = app.palette;
@@ -178,10 +181,11 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 response.request_focus();
             }
             filter_chips(app, ui);
+            labels::tab_bar(app, ui, pane, &palette);
         });
 }
 
-fn macos_header(app: &mut App, ui: &mut egui::Ui) {
+fn macos_header(app: &mut App, ui: &mut egui::Ui, pane: usize) {
     let palette = app.palette;
     let inset = theme::traffic_light_inset(ui.ctx());
     let mut drag = ui.max_rect();
@@ -277,6 +281,7 @@ fn macos_header(app: &mut App, ui: &mut egui::Ui) {
                 response.request_focus();
             }
             filter_chips(app, ui);
+            labels::tab_bar(app, ui, pane, &palette);
         });
 }
 
@@ -1697,7 +1702,7 @@ mod tests {
                     if collapsed {
                         compact_show(app, ui);
                     } else {
-                        show(app, ui);
+                        show(app, ui, 0);
                     }
                 },
             );

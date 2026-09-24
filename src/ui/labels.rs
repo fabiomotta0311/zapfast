@@ -88,6 +88,48 @@ fn active_label(app: &App) -> Option<String> {
     app.label_filter.clone()
 }
 
+/// Tabs used by the split workspace. Ctrl-clicking a tab opens it beside the
+/// current pane; a normal click changes only that pane.
+pub fn tab_bar(app: &mut App, ui: &mut egui::Ui, pane: usize, palette: &Palette) {
+    if !app.split_open() || app.show_archived || app.locked_folder_open() || app.labels.is_empty() {
+        return;
+    }
+    ui.add_space(3.0);
+    egui::ScrollArea::horizontal()
+        .id_salt(("workspace-tabs", pane))
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let active = app.panes[pane].label.as_deref();
+                let mut pick = None;
+                let all = widgets::filter_chip(ui, palette, "All", 0, active.is_none());
+                if all.clicked() {
+                    pick = Some(None);
+                }
+                for label in app.labels.clone() {
+                    let button = widgets::filter_chip(
+                        ui,
+                        palette,
+                        &label.name,
+                        0,
+                        active == Some(label.id.as_str()),
+                    );
+                    if button.clicked() {
+                        let modifiers = ui.ctx().input(|input| input.modifiers);
+                        if pane == 0 && (modifiers.ctrl || modifiers.command) {
+                            app.actions.push(Action::OpenLabelSplit(Some(label.id)));
+                        } else {
+                            pick = Some(Some(label.id));
+                        }
+                    }
+                }
+                if let Some(label) = pick {
+                    app.actions.push(Action::SelectPaneLabel { pane, label });
+                }
+            });
+        });
+}
+
 /// A row of label chips under the built-in ones, with
 /// [`Settings::label_chips`](crate::settings::Settings::label_chips) on.
 ///

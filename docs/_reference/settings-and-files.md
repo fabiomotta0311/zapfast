@@ -67,3 +67,26 @@ Changes on the Settings page are saved to `settings.json` immediately:
 
 Each run replaces `zapfast.log` and records warnings and errors. Include the
 end of this file when reporting an issue.
+
+
+## Testing a custom build beside the official ZapFast
+
+Keep the custom executable in a separate directory and launch it with separate Windows data roots. Do not copy or rename the official archive, session, or keyring entries. From Git Bash in the repository:
+
+```bash
+source /c/Users/fabio/dev/zapfast-localenv.sh
+cargo build --locked --release
+mkdir -p /c/Users/fabio/ZapFast-split/bin
+cp target/release/zapfast.exe /c/Users/fabio/ZapFast-split/bin/zapfast-split.exe
+```
+
+Create `C:\Users\fabio\ZapFast-split\run-split.cmd` with:
+
+```bat
+@echo off
+set "APPDATA=%~dp0data\roaming"
+set "LOCALAPPDATA=%~dp0data\local"
+"%~dp0bin\zapfast-split.exe" %*
+```
+
+Run only `run-split.cmd` for the custom build. The official installation keeps its normal `%APPDATA%` and `%LOCALAPPDATA%` roots, while the test build uses `data\roaming` and `data\local` below `ZapFast-split`. The custom build therefore needs its own phone link and must never be launched against the official data directories.

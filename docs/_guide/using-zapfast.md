@@ -234,6 +234,12 @@ chat list to icons** in Settings to keep a narrow column of avatars instead:
 unread chats show their badge, hovering names a chat, clicking opens it, and
 `Ctrl+B` brings the full list back.
 
+## Split workspace
+
+When two chat views are useful at once, click a label tab while holding **Ctrl** (or **Command** on macOS). ZapFast opens a second pane with its own chat list, tab selection, open conversation, composer, scroll position, and egui widget ids. Click inside a pane before typing to give it keyboard focus. Drag the divider to resize the panes, or click its **×** control to return to one pane. Each pane keeps a minimum usable width, so its composer remains readable.
+
+The split workspace is local UI state. It does not duplicate the archive, create another WhatsApp session, or send any extra data.
+
 ## Notifications and the tray
 
 Closing the window keeps ZapFast linked in the tray. Click the tray icon or

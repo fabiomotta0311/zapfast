@@ -55,6 +55,15 @@ pub enum ChatFilter {
     Channels,
 }
 
+/// The independent state of one visible workspace pane.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatPaneState {
+    /// Label shown by this pane; `None` shows every chat.
+    pub label: Option<String>,
+    /// Chat open in this pane.
+    pub chat: Option<ChatId>,
+}
+
 impl ChatFilter {
     pub const EVERY: [Self; 5] = [
         Self::All,
@@ -1287,6 +1296,19 @@ pub enum Action {
     SetChatFilter(ChatFilter),
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),
+    /// Selects a label in one workspace pane.
+    SelectPaneLabel {
+        pane: usize,
+        label: Option<String>,
+    },
+    /// Opens a second pane with the selected label.
+    OpenLabelSplit(Option<String>),
+    /// Closes the second pane.
+    CloseSplit,
+    /// Gives keyboard focus to a workspace pane.
+    FocusPane(usize),
+    /// Sets the first pane's share of the workspace width.
+    SetSplitRatio(f32),
     /// Replaces the labels worn by one chat.
     SetChatLabels {
         chat: ChatId,
