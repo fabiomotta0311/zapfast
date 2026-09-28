@@ -4,8 +4,11 @@ O ambiente dedicado fica em `/docker/zapfast-builder` no VPS `srv1768354`.
 Ele não altera nem monta volumes dos serviços Hermes. Usa Rust 1.98.0,
 `cross` 0.2.5 e a imagem cross-rs para `x86_64-pc-windows-gnu` fixada pelo
 digest em `Cross.toml`. O Cargo target é persistente nesse diretório para
-reaproveitar dependências entre commits. O driver limita Cargo a um job para
-conter o uso de CPU/RAM do VPS.
+reaproveitar dependências entre commits. O driver limita Cargo a um job e usa
+release otimizado sem ThinLTO (`codegen-units=4`): mantém `opt-level=3` e reduz
+o pico de RAM/tempo de link em comparação ao perfil padrão. O VPS tem 2 vCPUs,
+7,8 GiB de RAM e nenhum swap; builds devem ficar sequenciais lá, mas podem rodar
+em paralelo aos builds/trabalho no PC.
 
 A versão oficial **não** é compilada. Instale-a pelo instalável Windows
 publicado pelo projeto. Para uma PR ou a branch pessoal `custom`, rode na raiz
