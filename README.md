@@ -553,7 +553,8 @@ builds ZapFast once and copies it under the flavor-specific executable name.
 For remote Windows cross-builds on the VPS, use
 `bash scripts/build-vps-windows.sh <commit> {test|custom}`. It transfers only
 the committed source and returns the Windows executable under
-`target/vps-artifacts/<commit>/`.
+`target/vps-artifacts/<commit>/`. See `docs/vps-build-environment.md` for the
+VPS toolchain and build limitations.
 
 `whatsapp-rust` is pinned to a Git commit because version 0.7.0 on crates.io
 enables a `simd` feature that needs nightly Rust. The pinned commit builds on
