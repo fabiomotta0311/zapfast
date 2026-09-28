@@ -548,8 +548,9 @@ Both personal profiles isolate settings, encrypted archive, linked-device
 credentials, keyring entry, logs, media cache, single-instance lock, window
 identity, and notifications. They cannot adopt/migrate official data, register
 the official login-at-startup entry, or self-update. From the relevant source
-branch, run `bash scripts/build-local-variants.sh test` or `custom`; the script
-builds ZapFast once and copies it under the flavor-specific executable name.
+branch, run `bash scripts/build-local-variants.sh test` or `custom`. The first
+build from a source commit emits both executable names from one compilation;
+the filename selects the runtime data profile.
 For remote Windows cross-builds on the VPS, use
 `bash scripts/build-vps-windows.sh <commit> {test|custom}`. It transfers only
 the committed source and returns the Windows executable under

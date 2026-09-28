@@ -20,16 +20,17 @@ bash scripts/build-vps-windows.sh <commit-ou-ref> custom
 ```
 
 O script envia `git archive` do commit exato, sem `.git`, arquivos locais ou
-alterações não commitadas. O resultado volta para
-`target/vps-artifacts/<commit>/zapfast_test.exe` ou
-`zapfast_custom.exe`; o nome final seleciona o perfil isolado em runtime. Um
-`flock` serializa compilações que compartilham o cache.
+alterações não commitadas. A primeira compilação do SHA gera os dois nomes a
+partir do mesmo executável (a seleção do perfil é pelo nome em runtime); o
+segundo pedido para o mesmo SHA reutiliza esse arquivo e evita recompilar. Os
+resultados são devolvidos em `target/vps-artifacts/<commit>/zapfast_test.exe` e
+`zapfast_custom.exe`. Um `flock` serializa compilações que compartilham o cache.
 
 O alvo é Windows GNU x86_64, compatível com o toolchain GNU usado neste PC;
-não substitui as verificações Windows MSVC do CI oficial. O smoke test de
-ambiente compilou um executável PE32+ mínimo no VPS. A compilação do ZapFast
-completo e os testes do repositório precisam ser confirmados antes de tratar a
-pipeline como pronta para uso diário.
+não substitui as verificações Windows MSVC do CI oficial. A primeira compilação
+completa do ZapFast, com cache frio, terminou em 47m06s e gerou um executável
+PE32+ Windows de 79.424.512 bytes. Os testes do repositório ainda não foram
+executados nesse ambiente.
 
 Ferramentas instaladas em caminhos isolados:
 
