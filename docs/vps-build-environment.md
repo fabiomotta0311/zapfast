@@ -3,12 +3,14 @@
 O ambiente dedicado fica em `/docker/zapfast-builder` no VPS `srv1768354`.
 Ele não altera nem monta volumes dos serviços Hermes. Usa Rust 1.98.0,
 `cross` 0.2.5 e a imagem cross-rs para `x86_64-pc-windows-gnu` fixada pelo
-digest em `Cross.toml`. O Cargo target é persistente nesse diretório para
-reaproveitar dependências entre commits. O driver limita Cargo a um job e usa
-release otimizado sem ThinLTO (`codegen-units=4`): mantém `opt-level=3` e reduz
-o pico de RAM/tempo de link em comparação ao perfil padrão. O VPS tem 2 vCPUs,
-7,8 GiB de RAM e nenhum swap; builds devem ficar sequenciais lá, mas podem rodar
-em paralelo aos builds/trabalho no PC.
+digest em `Cross.toml`. Há um único worktree de build remoto em
+`/docker/zapfast-builder/worktree`, com `target` persistente dentro dele. O
+script serializa a troca do commit e a compilação por `flock`; assim o
+cache é reaproveitado entre commits sem compartilhar `CARGO_TARGET_DIR` entre
+worktrees. O driver limita Cargo a um job e usa release otimizado sem ThinLTO
+(`codegen-units=4`), mantendo `opt-level=3` e reduzindo o pico de RAM/tempo de
+link em comparação ao perfil padrão. O VPS tem 2 vCPUs, 7,8 GiB de RAM e nenhum
+swap; builds nele são sequenciais, mas podem rodar em paralelo ao trabalho no PC.
 
 A versão oficial **não** é compilada. Instale-a pelo instalável Windows
 publicado pelo projeto. Para uma PR ou a branch pessoal `custom`, rode na raiz
@@ -37,5 +39,6 @@ Ferramentas instaladas em caminhos isolados:
 - Rustup: `/docker/zapfast-builder/rustup`
 - Cargo, Rust e Cross: `/docker/zapfast-builder/cargo/bin` e
   `/docker/zapfast-builder/bin`
-- Cache de compilação: `/docker/zapfast-builder/target`
-- Workspaces e artefatos por SHA: `workspaces/` e `artifacts/`
+- Cargo target do worktree remoto: `/docker/zapfast-builder/worktree/target`
+- Código e artefatos por SHA: `worktree/source/` e `artifacts/`
+- Tarballs temporários de transferência: `incoming/`
