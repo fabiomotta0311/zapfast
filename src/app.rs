@@ -1994,7 +1994,9 @@ impl App {
         None
     }
 
-    /// Whether an outgoing message is still editable.
+    /// Whether an outgoing message is still editable. Only a text body: a
+    /// caption is edited from the message menu, and Arrow-Up keeps to the
+    /// text it always reached.
     pub fn can_edit(&self, message: &Message) -> bool {
         message.from_me
             && matches!(message.content, Content::Text { .. })
@@ -3225,21 +3227,37 @@ impl App {
         self.mention_start = None;
         self.stop_composing(&chat);
         if let Some(id) = self.editing.take() {
+            // A caption rides along with its media, so the edit keeps the
+            // content and only replaces the words under it.
+            let caption = self
+                .conversations
+                .get(&chat)
+                .and_then(|conversation| conversation.message(&id))
+                .is_some_and(|message| message.content.is_caption());
             if let Some(message) = self
                 .conversations
                 .get_mut(&chat)
                 .and_then(|conversation| conversation.message_mut(&id))
             {
-                message.content = Content::text(text.clone());
+                message.content.set_editable_text(&text);
                 message.edited = true;
                 message.mentions = mention_refs(&mentions);
             }
-            self.backend.send(Command::EditText {
-                chat,
-                id,
-                text,
-                mentions,
-            });
+            if caption {
+                self.backend.send(Command::EditCaption {
+                    chat,
+                    id,
+                    caption: text,
+                    mentions,
+                });
+            } else {
+                self.backend.send(Command::EditText {
+                    chat,
+                    id,
+                    text,
+                    mentions,
+                });
+            }
             return;
         }
         // The text is on its way, so there is nothing left to restore.
@@ -4004,10 +4022,8 @@ impl App {
                     .as_deref()
                     .and_then(|chat| self.conversations.get(chat))
                     .and_then(|conversation| conversation.message(&id))
-                    .and_then(|message| match &message.content {
-                        Content::Text { text, .. } => Some(text.clone()),
-                        _ => None,
-                    });
+                    .and_then(|message| message.content.editable_text())
+                    .map(str::to_owned);
                 if let Some(text) = text {
                     self.editing = Some(id);
                     self.composer_tools_open = false;

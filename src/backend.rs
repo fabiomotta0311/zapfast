@@ -256,6 +256,14 @@ pub enum Command {
         text: String,
         mentions: Vec<String>,
     },
+    /// Replaces the caption under an image, video, or document. The media
+    /// itself is unchanged, so the edit carries the original content.
+    EditCaption {
+        chat: ChatId,
+        id: String,
+        caption: String,
+        mentions: Vec<String>,
+    },
     Revoke {
         chat: ChatId,
         id: String,

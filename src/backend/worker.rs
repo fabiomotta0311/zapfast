@@ -4385,6 +4385,12 @@ impl Worker {
                 text,
                 mentions,
             } => self.edit_text(chat, id, text, mentions),
+            Command::EditCaption {
+                chat,
+                id,
+                caption,
+                mentions,
+            } => self.edit_caption(chat, id, caption, mentions),
             Command::Revoke { chat, id } => self.revoke(chat, id),
             Command::DeleteLocal { chat, id } => {
                 if let Ok(true) = self.archive.delete_message(&chat, &id) {
@@ -6843,6 +6849,70 @@ impl Worker {
                 });
             }
         });
+    }
+
+    /// Replaces the caption under a photo, video, or document.
+    ///
+    /// An edit replaces the whole content, so the media has to travel with
+    /// the new words. The archive keeps the original protobuf, which is where
+    /// the media key and direct path live: the caption is rewritten on that
+    /// copy and sent as the edit's content, leaving the file already on
+    /// WhatsApp's servers exactly as it was.
+    fn edit_caption(&mut self, chat: ChatId, id: String, caption: String, mentions: Vec<String>) {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        let Some(mut message) = self.recaptioned(&chat, &id, &caption) else {
+            self.emit(Event::Error(
+                "This message's attachment is no longer stored on this computer".to_owned(),
+            ));
+            return;
+        };
+        let mention_rows = self.mentions_of(&mentions);
+        if let Ok(Some(mut message)) = self.archive.message(&chat, &id) {
+            message.content.set_editable_text(&caption);
+            message.mentions = mention_rows.clone();
+            if let Ok(true) = self.archive.set_content(&chat, &id, &message.content, true) {
+                self.emit_message(&chat, &id);
+                self.emit_chat(&chat);
+            }
+        }
+        add_mentions(&mut message, &mentions);
+        self.apply_ephemeral(&chat, &mut message);
+        let commands = self.commands.clone();
+        tokio::spawn(async move {
+            if let Err(error) = client.edit_message(jid, id.clone(), message).await {
+                let _ = commands.send(Command::Sent {
+                    chat,
+                    id: String::new(),
+                    error: Some(format!("Could not send the edit: {error}")),
+                });
+            }
+        });
+    }
+
+    /// The stored protobuf of a message with its caption replaced, or `None`
+    /// when the archive no longer holds it or it carries no media to recaption.
+    fn recaptioned(&self, chat: &str, id: &str, caption: &str) -> Option<wa::Message> {
+        let raw = self.archive.raw(chat, id).ok().flatten()?;
+        let stored = wa::Message::decode_from_slice(&raw).ok()?;
+        let mut base = stored.get_base_message().clone();
+        let caption = (!caption.trim().is_empty()).then(|| caption.to_owned());
+        // Round videos travel in their own field, so both are covered.
+        if let Some(image) = base.image_message.as_option_mut() {
+            image.caption = caption.clone();
+        } else if let Some(video) = base
+            .video_message
+            .as_option_mut()
+            .or(base.ptv_message.as_option_mut())
+        {
+            video.caption = caption.clone();
+        } else {
+            let document = base.document_message.as_option_mut()?;
+            document.caption = caption;
+        }
+        Some(base)
     }
 
     fn revoke(&mut self, chat: ChatId, id: String) {
@@ -11361,6 +11431,99 @@ mod receipt_tests {
             worker.archive.meta("video_notes").unwrap().as_deref(),
             Some("1")
         );
+    }
+
+    /// An edit of a photo, video, or document replaces the whole content, so
+    /// the media has to travel with the new words. The stored protobuf is
+    /// where the media key and direct path live: the caption is rewritten on
+    /// that copy, so the file already on WhatsApp's servers is reused instead
+    /// of being uploaded a second time.
+    #[test]
+    fn a_caption_edit_keeps_the_media_keys_and_replaces_the_words() {
+        use crate::model::MediaState;
+        let (worker, _events, _inbox, _wa) = worker();
+        worker.archive.ensure_chat(PEER, "Demo").unwrap();
+
+        let stored = wa::Message {
+            image_message: MessageField::some(wa::message::ImageMessage {
+                caption: Some("first caption".to_owned()),
+                mimetype: Some("image/jpeg".to_owned()),
+                media_key: Some(b"media-key".to_vec()),
+                direct_path: Some("/v/t62.0-24/media".to_owned()),
+                file_length: Some(2048),
+                file_sha256: Some(b"sha".to_vec()),
+                file_enc_sha256: Some(b"enc".to_vec()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut row = own_message("photo", 100);
+        row.content = Content::Image {
+            caption: Some("first caption".into()),
+            media: Media {
+                mime: "image/jpeg".into(),
+                size: 2048,
+                width: Some(800),
+                height: Some(600),
+                path: Some(std::path::PathBuf::from("photo.jpg")),
+                state: MediaState::Idle,
+            },
+        };
+        worker
+            .archive
+            .insert_message(&row, Some(&stored.encode_to_vec()))
+            .unwrap();
+
+        let edited = worker
+            .recaptioned(PEER, "photo", "second caption")
+            .expect("the stored protobuf is rebuilt");
+        let image = edited.image_message.as_option().expect("still an image");
+        assert_eq!(image.caption.as_deref(), Some("second caption"));
+        // Every field the server needs to find the file again is unchanged.
+        assert_eq!(image.media_key.as_deref(), Some(&b"media-key"[..]));
+        assert_eq!(image.direct_path.as_deref(), Some("/v/t62.0-24/media"));
+        assert_eq!(image.mimetype.as_deref(), Some("image/jpeg"));
+        assert_eq!(image.file_length, Some(2048));
+        assert_eq!(image.file_sha256.as_deref(), Some(&b"sha"[..]));
+        assert_eq!(image.file_enc_sha256.as_deref(), Some(&b"enc"[..]));
+
+        // A video keeps its own fields, and a round video its own stanza.
+        let video = wa::Message {
+            video_message: MessageField::some(wa::message::VideoMessage {
+                caption: Some("old".to_owned()),
+                media_key: Some(b"video-key".to_vec()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        worker
+            .archive
+            .insert_message(&own_message("clip", 101), Some(&video.encode_to_vec()))
+            .unwrap();
+        let edited = worker.recaptioned(PEER, "clip", "new clip").unwrap();
+        let clip = edited.video_message.as_option().unwrap();
+        assert_eq!(clip.caption.as_deref(), Some("new clip"));
+        assert_eq!(clip.media_key.as_deref(), Some(&b"video-key"[..]));
+
+        // Clearing the caption sends no caption at all, not a blank one.
+        let cleared = worker.recaptioned(PEER, "photo", "   ").unwrap();
+        assert_eq!(cleared.image_message.as_option().unwrap().caption, None);
+
+        // A message whose protobuf is gone, or carries no media, is refused
+        // rather than turned into an edit that would drop the attachment.
+        assert!(worker.recaptioned(PEER, "missing", "x").is_none());
+        let text = wa::Message::text("no media here");
+        worker
+            .archive
+            .insert_message(&own_message("plain", 102), Some(&text.encode_to_vec()))
+            .unwrap();
+        assert!(worker.recaptioned(PEER, "plain", "x").is_none());
+        // An unreadable protobuf is refused too, not guessed at.
+        worker
+            .archive
+            .insert_message(&own_message("junk", 103), Some(&[0xff]))
+            .unwrap();
+        assert!(worker.recaptioned(PEER, "junk", "x").is_none());
     }
 
     pub(super) fn own_message(id: &str, timestamp: i64) -> Message {

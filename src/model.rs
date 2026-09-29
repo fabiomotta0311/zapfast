@@ -771,6 +771,47 @@ impl Content {
         }
     }
 
+    /// The editable text of a message: its body, or the caption under an
+    /// image, video, or document. The composer edits this either way.
+    pub fn editable_text(&self) -> Option<&str> {
+        match self {
+            Self::Text { text, .. } => Some(text),
+            Self::Image { caption, .. }
+            | Self::Video { caption, .. }
+            | Self::Document { caption, .. } => caption.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Replaces the editable text, returning whether this kind of message
+    /// carries one. The media itself, and the file already downloaded for
+    /// it, stay as they are.
+    pub fn set_editable_text(&mut self, text: &str) -> bool {
+        let text = (!text.trim().is_empty()).then(|| text.to_owned());
+        match self {
+            Self::Text { text: body, .. } => {
+                *body = text.unwrap_or_default();
+                true
+            }
+            Self::Image { caption, .. }
+            | Self::Video { caption, .. }
+            | Self::Document { caption, .. } => {
+                *caption = text;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether an edit of this message changes its media rather than only
+    /// its words, so the sender has to resend the whole content.
+    pub fn is_caption(&self) -> bool {
+        matches!(
+            self,
+            Self::Image { .. } | Self::Video { .. } | Self::Document { .. }
+        )
+    }
+
     pub fn media_at_mut(&mut self, card_index: Option<usize>) -> Option<&mut Media> {
         match card_index {
             None => self.media_mut(),
@@ -1749,6 +1790,71 @@ mod tests {
             file.text_matching("zebra").as_deref(),
             Some("Zebra report.pdf")
         );
+    }
+
+    #[test]
+    fn an_edit_reaches_the_caption_and_keeps_the_media() {
+        let mut photo = super::Content::Image {
+            caption: Some("first caption".into()),
+            media: media(),
+        };
+        assert_eq!(photo.editable_text(), Some("first caption"));
+        assert!(photo.is_caption(), "a photo edits as a caption");
+
+        assert!(photo.set_editable_text("second caption"));
+        assert_eq!(photo.editable_text(), Some("second caption"));
+        // The file itself is untouched: the edit only replaces the words.
+        assert!(photo.media().is_some());
+        assert!(photo.is_caption());
+
+        // A video and a document carry a caption the same way.
+        let mut video = super::Content::Video {
+            caption: None,
+            media: media(),
+            seconds: Some(3),
+            gif: false,
+            note: false,
+        };
+        assert_eq!(video.editable_text(), None);
+        assert!(video.set_editable_text("clip caption"));
+        assert_eq!(video.editable_text(), Some("clip caption"));
+        assert!(
+            video.media().is_some(),
+            "a caption edit leaves the file in place"
+        );
+
+        let mut file = super::Content::Document {
+            media: media(),
+            file_name: "report.pdf".into(),
+            caption: Some("old".into()),
+            pages: None,
+        };
+        assert!(file.set_editable_text("new"));
+        assert_eq!(file.editable_text(), Some("new"));
+        if let super::Content::Document { file_name, .. } = &file {
+            assert_eq!(file_name, "report.pdf", "the name is not the caption");
+        } else {
+            panic!("still a document");
+        }
+
+        // A text body edits the same way but is not a caption.
+        let mut text = super::Content::text("hello");
+        assert!(!text.is_caption());
+        assert!(text.set_editable_text("hi"));
+        assert_eq!(text.editable_text(), Some("hi"));
+
+        // Something with no words to edit says so instead of pretending.
+        let mut sticker = super::Content::Sticker {
+            media: media(),
+            animated: false,
+        };
+        assert_eq!(sticker.editable_text(), None);
+        assert!(!sticker.set_editable_text("anything"));
+        assert!(!sticker.is_caption());
+
+        // An emptied caption clears it rather than storing a blank string.
+        assert!(photo.set_editable_text("   "));
+        assert_eq!(photo.editable_text(), None);
     }
 
     #[test]
