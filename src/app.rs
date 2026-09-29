@@ -529,6 +529,8 @@ pub struct App {
     pub dialog: Option<Dialog>,
     /// Chat filter in the forwarding destination dialog.
     pub forward_search: String,
+    /// What the location dialog has to read, cleared when it opens.
+    pub location_draft: String,
     /// The group name being typed in the group info dialog.
     pub group_name_edit: Option<String>,
     /// The new-contact dialog's "Save to phone" box.
@@ -1082,6 +1084,7 @@ impl App {
             page: Page::Chats,
             dialog: None,
             forward_search: String::new(),
+            location_draft: String::new(),
             group_name_edit: None,
             new_contact_to_phone: true,
             sidebar_visible: true,
@@ -1752,6 +1755,7 @@ impl App {
             Some(
                 Dialog::ChatInfo(chat)
                     | Dialog::CreatePoll(chat)
+                    | Dialog::SendLocation(chat)
                     | Dialog::ConfirmDeleteChat(chat)
                     | Dialog::ConfirmClearChat(chat)
             ) if chat == id
@@ -3304,6 +3308,13 @@ impl App {
         }
         match unsent {
             Unsent::Text(text) => self.restore_text(&chat, text),
+            // The composer cannot hold a spot, so the dialog takes it back.
+            Unsent::Location { latitude, longitude } => {
+                if open {
+                    self.location_draft = crate::geo::Spot { latitude, longitude }.text();
+                    self.dialog = Some(Dialog::SendLocation(chat));
+                }
+            }
             Unsent::Voice(samples) => {
                 self.unsent_voice = Some((chat, samples));
                 self.focus_composer = open;
@@ -3729,6 +3740,12 @@ impl App {
         if !self.favorites_order() {
             self.scroll_chats_to_top = true;
         }
+    }
+
+    /// Sends a spot from the location dialog. A refusal restores it there.
+    fn send_location(&mut self, chat: ChatId, latitude: f64, longitude: f64, quoting: Option<String>) {
+        self.backend.send(Command::SendLocation { chat, latitude, longitude, quoting });
+        self.follow_outgoing();
     }
 
     fn send_text(&mut self, chat: ChatId, text: String, quoting: Option<String>) {
@@ -4246,6 +4263,17 @@ impl App {
             } => {
                 self.send_text(chat, text, quoting);
                 self.reply_to = None;
+            }
+            Action::SendLocation {
+                chat,
+                latitude,
+                longitude,
+                quoting,
+            } => {
+                self.send_location(chat, latitude, longitude, quoting);
+                self.reply_to = None;
+                self.location_draft.clear();
+                self.dialog = None;
             }
             Action::RefreshPoll { chat, message } => {
                 if let Some(row) = self
@@ -5134,6 +5162,9 @@ impl App {
                 self.mention_start = None;
                 if matches!(&dialog, Dialog::CreatePoll(_)) && !self.poll_creating {
                     self.poll_draft = Default::default();
+                }
+                if matches!(&dialog, Dialog::SendLocation(_)) {
+                    self.location_draft.clear();
                 }
                 if matches!(&dialog, Dialog::Forward { .. }) {
                     self.forward_search.clear();
@@ -9977,6 +10008,48 @@ mod tests {
             &egui::Context::default(),
         );
         assert!(!app.scroll_chats_to_top);
+    }
+
+    #[test]
+    fn sending_a_spot_closes_the_dialog_and_a_refusal_brings_it_back() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let (backend, mut commands, events) = Backend::recording_with_events();
+        app.backend = backend;
+        let chat = "fixture@s.whatsapp.net";
+        app.open_chat = Some(chat.into());
+        app.dialog = Some(Dialog::SendLocation(chat.into()));
+        app.location_draft = "-23.5505, -46.6333".into();
+        app.apply(
+            Action::SendLocation {
+                chat: chat.into(),
+                latitude: -23.5505,
+                longitude: -46.6333,
+                quoting: None,
+            },
+            &egui::Context::default(),
+        );
+        let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+        assert!(sent.iter().any(|command| matches!(command,
+            Command::SendLocation { latitude, longitude, .. }
+                if *latitude == -23.5505 && *longitude == -46.6333)));
+        assert_eq!(app.dialog, None, "the dialog closes over the spot");
+        assert!(app.location_draft.is_empty(), "and forgets it");
+
+        events
+            .send(refused(
+                chat,
+                None,
+                Unsent::Location {
+                    latitude: -23.5505,
+                    longitude: -46.6333,
+                },
+                Refusal::Offline,
+            ))
+            .unwrap();
+        app.handle_events();
+        assert_eq!(app.dialog, Some(Dialog::SendLocation(chat.into())));
+        assert_eq!(app.location_draft, "-23.55050, -46.63330");
     }
 
     #[test]
