@@ -36,6 +36,9 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
 
 /// An updater on the proxy-aware reqwest client.
 pub fn updater() -> anyhow::Result<Updater> {
+    if !crate::paths::AppDirs::is_official() {
+        anyhow::bail!("Self-updates are disabled for local test and custom builds");
+    }
     let mut builder = reqwest::blocking::Client::builder();
     if let Some(proxy) = crate::proxy::reqwest_proxy() {
         builder = builder.proxy(proxy);

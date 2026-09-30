@@ -90,7 +90,7 @@ pub fn acquire(dir: &Path, waker: &crate::backend::Waker, verb: &str) -> Outcome
             });
         }
     };
-    if legacy_instance_answers(verb) {
+    if crate::paths::AppDirs::is_official() && legacy_instance_answers(verb) {
         return Outcome::Surfaced;
     }
     let guard = Guard {

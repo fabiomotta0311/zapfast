@@ -11,18 +11,26 @@ pub const HIDDEN: &str = "--start-hidden";
 
 /// Whether this installation can register itself to start at login.
 pub fn supported() -> bool {
-    // A Flatpak cannot write the host's autostart folder; that needs the
-    // background portal instead.
-    std::env::var_os("FLATPAK_ID").is_none() && executable().is_some()
+    // Local PR/custom builds must never register themselves as the official
+    // ZapFast login item.
+    crate::paths::AppDirs::is_official()
+        && std::env::var_os("FLATPAK_ID").is_none()
+        && executable().is_some()
 }
 
 /// Whether ZapFast is registered to start at login.
 pub fn enabled() -> bool {
-    platform::enabled()
+    crate::paths::AppDirs::is_official() && platform::enabled()
 }
 
 /// Registers or removes the login entry for the running executable.
 pub fn set(enabled: bool) -> io::Result<()> {
+    if !crate::paths::AppDirs::is_official() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "local test/custom builds cannot change the official autostart entry",
+        ));
+    }
     if !enabled {
         return platform::remove();
     }
