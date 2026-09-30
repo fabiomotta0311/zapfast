@@ -100,7 +100,13 @@ pub fn acquire(dir: &Path, waker: &crate::backend::Waker, verb: &str) -> Outcome
     if let Err(error) = listen(dir, guard.commands(), waker.clone()) {
         log::warn!("cannot listen for other launches: {error}");
     }
-    listen_legacy(guard.commands(), waker.clone());
+    // Only the official copy answers the fixed legacy port. A flavour keeps its
+    // own archive, so a copy that predates the lock can never collide with it,
+    // while binding the port makes the official copy believe an older instance is
+    // running and refuse to start beside the flavour.
+    if crate::paths::AppDirs::is_official() {
+        listen_legacy(guard.commands(), waker.clone());
+    }
     Outcome::Only(guard)
 }
 
@@ -160,7 +166,8 @@ fn legacy_instance_answers(verb: &str) -> bool {
 
 /// Answers copies that predate the lock (0.15 and earlier), which only look
 /// for the fixed port: without a reply they would start beside this one on
-/// the same archive and linked device. Only `show` and `ping` are accepted
+/// the same archive and linked device. The port belongs to the official
+/// copy alone, so a flavour never binds it. Only `show` and `ping` are accepted
 /// there, as nothing on that port proves who is asking, and they at most
 /// bring the window forward.
 fn listen_legacy(commands: Queue, waker: crate::backend::Waker) {
