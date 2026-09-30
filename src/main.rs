@@ -125,11 +125,15 @@ fn default_log_filter(verbose: bool) -> &'static str {
 }
 
 fn main() -> eframe::Result<()> {
-    // First, before parsing the command line or touching any state: run the
-    // update helper when asked (`--apply-update <job>`, then exit), and take
-    // `--update-receipt` and `--update-error` off the command line.
-    let launch = fastframe_update::intercept(&zapfast::updates::CONFIG);
-    let cli = Cli::parse_from(&launch.arguments);
+    // First, before parsing the command line or touching any state, let only
+    // the official executable enter the updater's install/intercept path.
+    let (arguments, launch_error, receipt) = if paths::AppDirs::is_official() {
+        let launch = fastframe_update::intercept(&zapfast::updates::CONFIG);
+        (launch.arguments, launch.error, launch.receipt)
+    } else {
+        (std::env::args_os().collect::<Vec<_>>(), None, None)
+    };
+    let cli = Cli::parse_from(arguments);
     let discovered = paths::AppDirs::discover();
     if matches!(cli.command, Some(Control::ReloadThemes)) {
         if let Err(error) = single_instance::send(&discovered.runtime, "reload-themes") {
@@ -219,7 +223,7 @@ fn main() -> eframe::Result<()> {
     if cli.verbose {
         app.update_arguments.push("--verbose".into());
     }
-    if let Some(error) = launch.error {
+    if let Some(error) = launch_error {
         app.toast_error(error);
     }
     if let Some(guard) = &instance {
@@ -244,7 +248,7 @@ fn main() -> eframe::Result<()> {
         let (x, y) = value.split_once(',')?;
         Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
     });
-    let mut update_receipt = launch.receipt;
+    let mut update_receipt = receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
     // window when the tray, a notification, or another launch requests one;
     // without a tray a hidden start shows the window (App::start_hidden).
@@ -331,11 +335,19 @@ fn native_options(demo_persistence: Option<std::path::PathBuf>) -> eframe::Nativ
     let demo_size = demo_size_arg().unwrap_or([1180.0, 780.0]);
     let demo = demo_persistence.is_some();
     let viewport = egui::ViewportBuilder::default()
-        .with_title(if demo { "ZapFast Demo" } else { "ZapFast" })
+        .with_title(if demo {
+            "ZapFast Demo".to_owned()
+        } else if paths::AppDirs::flavor_label().is_empty() {
+            "ZapFast".to_owned()
+        } else {
+            format!("ZapFast {}", paths::AppDirs::flavor_label())
+        })
         .with_app_id(if demo {
             "zapfast-demo".to_owned()
-        } else {
+        } else if paths::AppDirs::is_official() {
             std::env::var("FLATPAK_ID").unwrap_or_else(|_| "zapfast".to_owned())
+        } else {
+            paths::AppDirs::profile_name().to_owned()
         })
         .with_inner_size(demo_size)
         // Keep the floor small enough that Windows can still snap the window

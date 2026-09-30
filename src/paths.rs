@@ -17,16 +17,50 @@ pub struct AppDirs {
 }
 
 impl AppDirs {
+    /// Stable data-directory name selected by the executable filename.
+    /// Identifying the running executable rather than using Cargo features
+    /// keeps `--all-features` tests of the official binary on official data.
+    pub fn profile_name() -> &'static str {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| {
+                path.file_stem()
+                    .and_then(|name| name.to_str())
+                    .map(Self::profile_name_for_executable)
+            })
+            .unwrap_or("zapfast")
+    }
+
+    fn profile_name_for_executable(name: &str) -> &'static str {
+        match name {
+            "zapfast_test" => "zapfast-test",
+            "zapfast_custom" => "zapfast-custom",
+            _ => "zapfast",
+        }
+    }
+
+    pub fn flavor_label() -> &'static str {
+        match Self::profile_name() {
+            "zapfast-test" => "TEST",
+            "zapfast-custom" => "CUSTOM",
+            _ => "",
+        }
+    }
+
+    pub fn is_official() -> bool {
+        Self::profile_name() == "zapfast"
+    }
+
     pub fn discover() -> Self {
-        match Self::of("zapfast") {
+        match Self::of(Self::profile_name()) {
             Some(dirs) => dirs,
             None => {
                 let fallback = std::env::current_dir().unwrap_or_default();
                 Self {
-                    config: fallback.join("zapfast-config"),
-                    state: fallback.join("zapfast-state"),
-                    cache: fallback.join("zapfast-cache"),
-                    runtime: fallback.join("zapfast-run"),
+                    config: fallback.join(format!("{}-config", Self::profile_name())),
+                    state: fallback.join(format!("{}-state", Self::profile_name())),
+                    cache: fallback.join(format!("{}-cache", Self::profile_name())),
+                    runtime: fallback.join(format!("{}-run", Self::profile_name())),
                 }
             }
         }
@@ -50,6 +84,9 @@ impl AppDirs {
     /// Adopts earlier names, newest first, without replacing existing data.
     /// Call only after acquiring the instance guard, and never for demo runs.
     pub fn adopt_previous_names(&self) -> std::io::Result<()> {
+        if !Self::is_official() {
+            return Ok(());
+        }
         for name in ["fastsapp", "fastwhatsapp"] {
             if let Some(old) = Self::of(name) {
                 self.adopt(&old)?;
@@ -211,6 +248,38 @@ fn adopt_directory(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_names_select_three_disjoint_profiles() {
+        assert_eq!(AppDirs::profile_name_for_executable("zapfast"), "zapfast");
+        assert_eq!(
+            AppDirs::profile_name_for_executable("zapfast_test"),
+            "zapfast-test"
+        );
+        assert_eq!(
+            AppDirs::profile_name_for_executable("zapfast_custom"),
+            "zapfast-custom"
+        );
+        assert_eq!(
+            AppDirs::profile_name_for_executable("zapfast-123"),
+            "zapfast"
+        );
+    }
+
+    #[test]
+    fn discovered_data_roots_match_the_running_executable_profile() {
+        let profile = AppDirs::profile_name();
+        let dirs = AppDirs::discover();
+        assert!(dirs.config.ends_with(profile));
+        assert!(dirs.state.ends_with(profile));
+        assert!(dirs.cache.ends_with(profile));
+        assert!(!dirs.runtime.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn previous_names_are_adopted_only_by_the_official_build() {
+        assert_eq!(AppDirs::is_official(), AppDirs::profile_name() == "zapfast");
+    }
 
     fn root(name: &str) -> PathBuf {
         let root =
