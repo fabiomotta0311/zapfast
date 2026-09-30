@@ -91,7 +91,7 @@ fn active_label(app: &App) -> Option<String> {
 /// Tabs used by the split workspace. Ctrl-clicking a tab opens it beside the
 /// current pane; a normal click changes only that pane.
 pub fn tab_bar(app: &mut App, ui: &mut egui::Ui, pane: usize, palette: &Palette) {
-    if !app.split_open() || app.show_archived || app.locked_folder_open() || app.labels.is_empty() {
+    if app.show_archived || app.locked_folder_open() || app.labels.is_empty() {
         return;
     }
     ui.add_space(3.0);
