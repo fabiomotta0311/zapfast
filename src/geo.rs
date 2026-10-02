@@ -49,27 +49,81 @@ pub fn map_url(spot: Spot) -> String {
     )
 }
 
+/// The map a link names, so each provider's own conventions are read only
+/// where that provider writes them and an unrelated address is refused
+/// rather than guessed at.
+#[derive(Clone, Copy, PartialEq)]
+enum Provider {
+    Google,
+    Apple,
+    OpenStreetMap,
+}
+
+/// Reads the map a link's host names, or `None` when it names none: the
+/// dialog promises supported map links, and a spot pinned out of an
+/// unrelated URL would be a guess the reader never sees.
+fn provider(url: &reqwest::Url) -> Option<Provider> {
+    let host = url.host_str()?.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    // Google serves each country from its own domain, so the label is what
+    // identifies it, and its links come from `maps.google.com` and short
+    // hosts alike.
+    if host == "google.com"
+        || host.ends_with(".google.com")
+        || host.split('.').next() == Some("google")
+    {
+        Some(Provider::Google)
+    } else if host == "apple.com" || host.ends_with(".apple.com") {
+        Some(Provider::Apple)
+    } else if host == "openstreetmap.org" || host.ends_with(".openstreetmap.org") {
+        Some(Provider::OpenStreetMap)
+    } else {
+        None
+    }
+}
+
 /// Reads a link to a spot: Google Maps, Apple Maps, OpenStreetMap, and any
 /// `geo:` URI. Google's place markers name the exact spot, so they win over the
 /// viewport around them.
 fn link(text: &str) -> Option<Spot> {
     let url = reqwest::Url::parse(text).ok()?;
     if url.scheme() == "geo" {
-        return two(url.path());
+        // A `geo:` URI may carry standard parameters after the coordinates,
+        // as in `geo:0,0;u=35`, which name no spot of their own.
+        let coordinates = url.path().split(';').next().unwrap_or(url.path());
+        return two(coordinates);
     }
     if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
-    if let Some(marked) = marked_place(text) {
-        return Some(marked);
+    match provider(&url)? {
+        Provider::Google => marked_place(text)
+            .or_else(|| url.path().split_once("/@").and_then(|(_, rest)| two(rest)))
+            .or_else(|| {
+                query_spot(
+                    &url,
+                    &[
+                        "q",
+                        "ll",
+                        "query",
+                        "daddr",
+                        "destination",
+                        "center",
+                        "loc",
+                        "sll",
+                    ],
+                )
+            }),
+        Provider::Apple => query_spot(
+            &url,
+            &["ll", "q", "sll", "center", "query", "daddr", "destination"],
+        ),
+        // The `mlat`/`mlon` pair is the marker itself, so it is read before
+        // the viewport the fragment describes.
+        Provider::OpenStreetMap => osm_marker(&url)
+            .or_else(|| url.fragment().and_then(openstreetmap_position))
+            .or_else(|| query_spot(&url, &["ll", "q", "sll"])),
     }
-    if let Some(viewport) = url.path().split_once("/@").and_then(|(_, rest)| two(rest)) {
-        return Some(viewport);
-    }
-    // A `mlat`/`mlon` pair, or a `q=`/`ll=` naming coordinates, is the marker
-    // itself, so it is read before the viewport an OpenStreetMap fragment
-    // describes.
-    query_spot(&url).or_else(|| url.fragment().and_then(openstreetmap_position))
 }
 
 /// Reads the `!3d<latitude>!4d<longitude>` markers a Google Maps link carries.
@@ -97,21 +151,15 @@ fn openstreetmap_position(fragment: &str) -> Option<Spot> {
     joined(parts.next()?, parts.next()?)
 }
 
-/// Reads a spot out of a link's query: `q`, `ll`, `query`, `daddr`,
-/// `destination`, `center`, `loc` or `sll` naming the coordinates, or
-/// OpenStreetMap's `mlat` and `mlon` pair.
-fn query_spot(url: &reqwest::Url) -> Option<Spot> {
+/// Reads OpenStreetMap's own `mlat` and `mlon` pair, the marker its links
+/// carry before the `#map=` viewport.
+fn osm_marker(url: &reqwest::Url) -> Option<Spot> {
     let mut latitude = None;
     let mut longitude = None;
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
             "mlat" => latitude = number(&value),
             "mlon" => longitude = number(&value),
-            "q" | "ll" | "query" | "daddr" | "destination" | "center" | "loc" | "sll" => {
-                if let Some(spot) = pair(&value) {
-                    return Some(spot);
-                }
-            }
             _ => {}
         }
     }
@@ -119,6 +167,20 @@ fn query_spot(url: &reqwest::Url) -> Option<Spot> {
         latitude: latitude?,
         longitude: longitude?,
     })
+}
+
+/// Reads a spot out of a link's query, under the keys `keys` names. Each map
+/// writes its marker under its own key, and a value that is not a pair of
+/// coordinates is a place name, which this refuses.
+fn query_spot(url: &reqwest::Url, keys: &[&str]) -> Option<Spot> {
+    for (key, value) in url.query_pairs() {
+        if keys.contains(&key.as_ref())
+            && let Some(spot) = pair(&value)
+        {
+            return Some(spot);
+        }
+    }
+    None
 }
 
 /// Reads the first two comma-separated numbers of a chunk, which is how a
@@ -300,6 +362,47 @@ mod tests {
         assert_eq!(spot("https://www.google.com/maps/place/Sao+Paulo"), None);
         assert_eq!(spot("https://example.com/"), None);
         assert_eq!(spot("https://www.openstreetmap.org/way/123"), None);
+    }
+
+    /// A `geo:` URI may carry standard parameters after the coordinates, as
+    /// in `;u=40`. They name no spot, so the coordinate component alone is
+    /// read.
+    #[test]
+    fn a_geo_uri_is_read_before_its_parameters() {
+        assert_eq!(spot_of("geo:-23.5505,-46.6333;u=40"), (-23.5505, -46.6333));
+        assert_eq!(spot_of("geo:0,0;crs=wgs84;u=35"), (0.0, 0.0));
+    }
+
+    /// The dialog promises supported map links, so each map's own syntax is
+    /// read on that map and nowhere else: an unrelated URL must not be able to
+    /// pin coordinates.
+    #[test]
+    fn an_unrelated_address_cannot_pin_a_spot() {
+        assert_eq!(spot("https://example.com/?q=12,34"), None);
+        assert_eq!(spot("https://example.com/?ll=12,34"), None);
+        assert_eq!(spot("https://example.com/?mlat=12&mlon=34"), None);
+        // Google's markers and viewport are Google's, not everyone's.
+        assert_eq!(spot("https://example.com/maps/@12,34,15z"), None);
+        assert_eq!(spot("https://example.com/place/X/data=!3d12!4d34"), None);
+        // A coordinate pair in an OpenStreetMap fragment is OpenStreetMap's.
+        assert_eq!(spot("https://example.com/#map=15/12/34"), None);
+    }
+
+    /// Each supported map keeps reading its own links the way it did.
+    #[test]
+    fn every_supported_map_still_reads_its_own_links() {
+        assert_eq!(
+            spot_of("https://www.google.com.br/maps/place/X/data=!3d-23.5505!4d-46.6333"),
+            (-23.5505, -46.6333)
+        );
+        assert_eq!(
+            spot_of("https://maps.apple.com/?ll=-23.5505,-46.6333"),
+            (-23.5505, -46.6333)
+        );
+        assert_eq!(
+            spot_of("https://www.openstreetmap.org/?mlat=-23.5505&mlon=-46.6333"),
+            (-23.5505, -46.6333)
+        );
     }
 
     /// The link the card opens is one the reader can paste back in.

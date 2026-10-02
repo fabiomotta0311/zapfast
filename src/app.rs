@@ -581,6 +581,13 @@ pub struct App {
     pub poll_draft: crate::model::PollDraft,
     /// What the location dialog has to read, cleared when it opens.
     pub location_draft: String,
+    /// A spot the worker refused for a chat that is not open, kept per chat
+    /// and handed back when the reader returns to it, the way a refused text
+    /// stays its chat's draft.
+    pub location_drafts: HashMap<ChatId, String>,
+    /// Counts the location sends made here, so a refusal that answers one the
+    /// reader has since replaced changes nothing.
+    pub location_generation: u64,
     pub poll_creating: bool,
     pub poll_voting: HashSet<(ChatId, String)>,
     pub interactive_sending: HashSet<(ChatId, String)>,
@@ -1053,6 +1060,8 @@ impl App {
             forward_search: String::new(),
             poll_draft: Default::default(),
             location_draft: String::new(),
+            location_drafts: HashMap::new(),
+            location_generation: 0,
             poll_creating: false,
             poll_voting: HashSet::new(),
             interactive_sending: HashSet::new(),
@@ -1410,6 +1419,7 @@ impl App {
         self.conversations.remove(id);
         self.drafts.remove(id);
         self.draft_mentions.remove(id);
+        self.location_drafts.remove(id);
         self.typing.remove(id);
         self.unread_kept.remove(id);
         if self.scroll_chat_into_view.as_deref() == Some(id) {
@@ -2620,6 +2630,8 @@ impl App {
                 // Unsent text belongs to the account that was unlinked.
                 self.drafts.clear();
                 self.draft_mentions.clear();
+                self.location_drafts.clear();
+                self.location_draft.clear();
                 self.composer.clear();
                 self.composer_mentions.clear();
                 // The password guarded chats that are gone now; a forgotten
@@ -2714,6 +2726,7 @@ impl App {
         // Clearing a chat also removes its stored draft.
         self.drafts.remove(id);
         self.draft_mentions.remove(id);
+        self.location_drafts.remove(id);
         self.search_hits
             .retain(|message| message.chat != id || message.timestamp > through);
         // Nothing earlier is left here, and the phone no longer has it either.
@@ -2877,16 +2890,8 @@ impl App {
             Unsent::Location {
                 latitude,
                 longitude,
-            } => {
-                if open {
-                    self.location_draft = crate::geo::Spot {
-                        latitude,
-                        longitude,
-                    }
-                    .text();
-                    self.dialog = Some(Dialog::SendLocation(chat));
-                }
-            }
+                generation,
+            } => self.restore_location(&chat, latitude, longitude, generation),
             Unsent::Voice(samples) => {
                 self.unsent_voice = Some((chat, samples));
                 self.focus_composer = open;
@@ -2950,6 +2955,37 @@ impl App {
         {
             self.store_draft(chat, &text);
             self.drafts.insert(chat.to_owned(), text);
+        }
+    }
+
+    /// Returns a refused spot to its chat's location dialog, or keeps it for
+    /// that chat when another is open, the way a refused text keeps a draft.
+    /// A refusal for a send the reader has since replaced is dropped: a
+    /// newer spot typed into the dialog, or a newer dialog or modal opened
+    /// over it, must survive the older answer.
+    fn restore_location(&mut self, chat: &str, latitude: f64, longitude: f64, generation: u64) {
+        if generation != self.location_generation {
+            return;
+        }
+        let text = crate::geo::Spot {
+            latitude,
+            longitude,
+        }
+        .text();
+        // A dialog already open for this chat, holding another spot, is the
+        // reader's newer intent; another modal entirely must not be closed.
+        if self.open_chat.as_deref() == Some(chat)
+            && self.location_draft.trim().is_empty()
+            && matches!(&self.dialog, None | Some(Dialog::SendLocation(_)))
+        {
+            self.location_draft = text;
+            self.dialog = Some(Dialog::SendLocation(chat.to_owned()));
+        } else if self
+            .location_drafts
+            .get(chat)
+            .is_none_or(|draft| draft.trim().is_empty())
+        {
+            self.location_drafts.insert(chat.to_owned(), text);
         }
     }
 
@@ -3163,6 +3199,15 @@ impl App {
                     });
             self.composer = self.drafts.remove(&id).unwrap_or_default();
             self.composer_mentions = self.draft_mentions.remove(&id).unwrap_or_default();
+            // A spot refused while another chat was open comes back with this
+            // one, in the dialog that is the only place a spot can be held. It
+            // waits while another modal is open rather than closing it.
+            if self.dialog.is_none()
+                && let Some(spot) = self.location_drafts.remove(&id)
+            {
+                self.location_draft = spot;
+                self.dialog = Some(Dialog::SendLocation(id.clone()));
+            }
             // A search belongs to the chat it was typed in.
             self.close_chat_search();
             self.reply_to = None;
@@ -3269,7 +3314,9 @@ impl App {
     }
 
     /// Sends the spot the dialog read. A refusal brings the dialog back with
-    /// the spot in it, since the composer cannot hold one.
+    /// the spot in it, since the composer cannot hold one. The send is
+    /// numbered, so a refusal that arrives late cannot overwrite a spot typed
+    /// into a dialog opened after it.
     fn send_location(
         &mut self,
         chat: ChatId,
@@ -3277,11 +3324,13 @@ impl App {
         longitude: f64,
         quoting: Option<String>,
     ) {
+        self.location_generation += 1;
         self.backend.send(Command::SendLocation {
             chat,
             latitude,
             longitude,
             quoting,
+            generation: self.location_generation,
         });
         self.follow_outgoing();
     }
@@ -3776,10 +3825,12 @@ impl App {
                 longitude,
                 quoting,
             } => {
-                self.send_location(chat, latitude, longitude, quoting);
+                self.send_location(chat.clone(), latitude, longitude, quoting);
                 self.reply_to = None;
                 self.location_draft.clear();
                 self.dialog = None;
+                // The spot is on its way, so nothing is kept for this chat.
+                self.location_drafts.remove(&chat);
             }
             Action::RefreshPoll { chat, message } => {
                 if let Some(row) = self
@@ -8968,8 +9019,8 @@ mod tests {
         );
         let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
         assert!(sent.iter().any(|command| matches!(command,
-            Command::SendLocation { latitude, longitude, .. }
-                if *latitude == -23.5505 && *longitude == -46.6333)));
+            Command::SendLocation { latitude, longitude, generation, .. }
+                if *latitude == -23.5505 && *longitude == -46.6333 && *generation == 1)));
         assert_eq!(app.dialog, None, "the dialog closes over the spot");
         assert!(app.location_draft.is_empty(), "and forgets it");
 
@@ -8982,6 +9033,7 @@ mod tests {
                 Unsent::Location {
                     latitude: -23.5505,
                     longitude: -46.6333,
+                    generation: 1,
                 },
                 Refusal::Offline,
             ))
@@ -8989,6 +9041,128 @@ mod tests {
         app.handle_events();
         assert_eq!(app.dialog, Some(Dialog::SendLocation(chat.into())));
         assert_eq!(app.location_draft, "-23.55050, -46.63330");
+    }
+
+    /// A refusal that lands after the reader has moved to another chat must not
+    /// drop the only copy of the spot: it waits for that chat, the way a
+    /// refused text waits as its draft.
+    #[test]
+    fn a_refused_spot_waits_for_its_own_chat() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let (backend, _commands, events) = Backend::recording_with_events();
+        app.backend = backend;
+        let chat = "fixture@s.whatsapp.net";
+        let other = "other@s.whatsapp.net";
+        app.open_chat = Some(chat.into());
+        app.apply(
+            Action::SendLocation {
+                chat: chat.into(),
+                latitude: -23.5505,
+                longitude: -46.6333,
+                quoting: None,
+            },
+            &egui::Context::default(),
+        );
+        // The reader switches away before the worker answers.
+        app.open_chat = Some(other.into());
+        app.location_generation = 1;
+        events
+            .send(refused(
+                chat,
+                None,
+                Unsent::Location {
+                    latitude: -23.5505,
+                    longitude: -46.6333,
+                    generation: 1,
+                },
+                Refusal::Offline,
+            ))
+            .unwrap();
+        app.handle_events();
+        assert_eq!(app.dialog, None, "no dialog is opened over another chat");
+        assert!(
+            app.location_draft.is_empty(),
+            "and the spot does not land in this chat's dialog"
+        );
+        assert_eq!(
+            app.location_drafts.get(chat).map(String::as_str),
+            Some("-23.55050, -46.63330"),
+            "the spot waits for the chat it was to go to"
+        );
+
+        // Coming back to that chat brings the spot back with it.
+        app.open_chat(chat.into());
+        assert_eq!(app.dialog, Some(Dialog::SendLocation(chat.into())));
+        assert_eq!(app.location_draft, "-23.55050, -46.63330");
+        assert!(
+            !app.location_drafts.contains_key(chat),
+            "and is no longer waiting"
+        );
+    }
+
+    /// A refusal for a send the reader has already replaced is answered by
+    /// nothing: a newer spot in the dialog, a second location dialog, and
+    /// another modal all survive the older answer.
+    #[test]
+    fn a_late_refusal_cannot_overwrite_newer_state() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let (backend, _commands, events) = Backend::recording_with_events();
+        app.backend = backend;
+        let chat = "fixture@s.whatsapp.net";
+        let stale = |generation| {
+            refused(
+                chat,
+                None,
+                Unsent::Location {
+                    latitude: -23.5505,
+                    longitude: -46.6333,
+                    generation,
+                },
+                Refusal::Offline,
+            )
+        };
+        app.open_chat = Some(chat.into());
+
+        // A second send supersedes the first, so its refusal is dropped.
+        app.location_generation = 2;
+        events.send(stale(1)).unwrap();
+        app.handle_events();
+        assert_eq!(app.dialog, None, "a superseded send restores nothing");
+        assert!(app.location_draft.is_empty());
+        assert!(app.location_drafts.is_empty());
+
+        // A spot typed into the dialog since the send is the reader's newer
+        // intent and is kept.
+        app.location_generation = 3;
+        app.dialog = Some(Dialog::SendLocation(chat.into()));
+        app.location_draft = "51.5074, -0.1278".into();
+        events.send(stale(3)).unwrap();
+        app.handle_events();
+        assert_eq!(
+            app.location_draft, "51.5074, -0.1278",
+            "the newer spot stays"
+        );
+        assert_eq!(app.dialog, Some(Dialog::SendLocation(chat.into())));
+
+        // A different modal must not be closed to make room for the spot.
+        app.location_generation = 4;
+        app.dialog = Some(Dialog::CreatePoll(chat.into()));
+        app.location_draft.clear();
+        events.send(stale(4)).unwrap();
+        app.handle_events();
+        assert_eq!(
+            app.dialog,
+            Some(Dialog::CreatePoll(chat.into())),
+            "the modal the reader opened is left alone"
+        );
+        assert!(app.location_draft.is_empty());
+        assert_eq!(
+            app.location_drafts.get(chat).map(String::as_str),
+            Some("-23.55050, -46.63330"),
+            "and the spot waits instead of being lost"
+        );
     }
 
     #[test]

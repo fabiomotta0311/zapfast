@@ -4275,7 +4275,8 @@ impl Worker {
                 latitude,
                 longitude,
                 quoting,
-            } => self.send_location(chat, latitude, longitude, quoting),
+                generation,
+            } => self.send_location(chat, latitude, longitude, quoting, generation),
             Command::ReplyInteractive {
                 chat,
                 message,
@@ -5926,10 +5927,12 @@ impl Worker {
         latitude: f64,
         longitude: f64,
         quoting: Option<String>,
+        generation: u64,
     ) {
         let unsent = || Unsent::Location {
             latitude,
             longitude,
+            generation,
         };
         let (context, shown) = match self.quote(&chat, quoting.as_deref()) {
             Ok(Some((context, shown))) => (Some(context), Some(shown)),
@@ -10567,6 +10570,7 @@ mod tests {
                 latitude: -23.5505,
                 longitude: -46.6333,
                 quoting: None,
+                generation: 7,
             })
             .await;
         if let Event::SendRefused {
@@ -10574,6 +10578,7 @@ mod tests {
                 Unsent::Location {
                     latitude,
                     longitude,
+                    generation,
                 },
             reason,
             ..
@@ -10581,6 +10586,9 @@ mod tests {
         {
             assert_eq!(latitude, -23.5505);
             assert_eq!(longitude, -46.6333);
+            // The refusal names the send it answers, so the app can tell a
+            // late answer from one that is still wanted.
+            assert_eq!(generation, 7);
             assert_eq!(reason, Refusal::Offline);
         } else {
             panic!("a refusal carries the spot back to the dialog");

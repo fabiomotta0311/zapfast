@@ -4517,17 +4517,14 @@ fn content(
             let title = name
                 .clone()
                 .unwrap_or_else(|| crate::i18n::gettext(view.locale, "Location").into_owned());
-            // A spot sent from here names no place, so the coordinates take the
-            // line an address would.
-            let detail = address.clone().or_else(|| {
-                Some(
-                    Spot {
-                        latitude: *latitude,
-                        longitude: *longitude,
-                    }
-                    .text(),
-                )
-            });
+            let detail = location_detail(
+                address.as_deref(),
+                Spot {
+                    latitude: *latitude,
+                    longitude: *longitude,
+                },
+                own,
+            );
             location_card(
                 ui,
                 view,
@@ -5582,6 +5579,16 @@ fn preview_card(
     if response.clicked() {
         actions.push(Action::OpenUrl(preview.url.clone()));
     }
+}
+
+/// The line under a location card's title: the address the sender supplied, or
+/// the coordinates of a spot sent from here, which names no place and carries
+/// no address. A received card keeps the address it came with and gains none,
+/// so only a locally sent location falls back to its own coordinates.
+fn location_detail(address: Option<&str>, spot: Spot, from_me: bool) -> Option<String> {
+    address
+        .map(str::to_owned)
+        .or_else(|| from_me.then(|| spot.text()))
 }
 
 /// A location as a card: the map preview WhatsApp sent across the top, then
@@ -7120,6 +7127,36 @@ mod tests {
         assert_eq!(
             shared_contact_details("BEGIN:VCARD\nFN:No phone\nEND:VCARD", "Fallback"),
             None
+        );
+    }
+
+    /// A spot sent from here names no place and carries no address, so its own
+    /// coordinates take the address line. A received card must not change: it
+    /// keeps whatever address the sender gave it, and gains none.
+    #[test]
+    fn only_a_locally_sent_location_falls_back_to_its_coordinates() {
+        let here = Spot {
+            latitude: -23.5505,
+            longitude: -46.6333,
+        };
+        assert_eq!(
+            location_detail(None, here, true).as_deref(),
+            Some("-23.55050, -46.63330"),
+            "a spot sent from here shows where it is"
+        );
+        assert_eq!(
+            location_detail(None, here, false),
+            None,
+            "a received address-less card is left exactly as it was"
+        );
+        // An address is the sender's, on either side, and always wins.
+        assert_eq!(
+            location_detail(Some("Av Paulista"), here, true).as_deref(),
+            Some("Av Paulista")
+        );
+        assert_eq!(
+            location_detail(Some("Av Paulista"), here, false).as_deref(),
+            Some("Av Paulista")
         );
     }
 

@@ -160,6 +160,9 @@ pub enum Command {
         latitude: f64,
         longitude: f64,
         quoting: Option<String>,
+        /// Counts location sends, so a refusal answers the one it was made
+        /// for and not a later one.
+        generation: u64,
     },
     ReplyInteractive {
         chat: ChatId,
@@ -971,10 +974,13 @@ pub enum Refusal {
 pub enum Unsent {
     /// Composer text in wire form, with `@user` mention tokens.
     Text(String),
-    /// The spot a location was to send, so the dialog can come back with it.
+    /// The spot a location was to send, so the dialog can come back with it,
+    /// and the send's generation, so a refusal for a spot the reader has
+    /// since replaced changes nothing.
     Location {
         latitude: f64,
         longitude: f64,
+        generation: u64,
     },
     Voice(Vec<f32>),
     Files {
