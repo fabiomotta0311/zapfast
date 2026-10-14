@@ -215,6 +215,12 @@ windows-native-keyring-store = { version = "1.1", default-features = false }
 winrt-notification = { package = "tauri-winrt-notification", version = "0.7.3" }
 # Registry and locale calls.
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Registry"] }
+# WhatsApp TLS must use the Windows trust store so locally trusted TLS
+# inspection certificates are validated without disabling certificate checks.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 # Accesses the native window handle for the taskbar overlay.
 raw-window-handle = "0.6"
 # Pauses other apps' media through the system media transport controls while

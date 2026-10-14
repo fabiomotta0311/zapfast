@@ -238,6 +238,46 @@ pub type Link = (
     whatsapp_rust::async_channel::Receiver<TransportEvent>,
 );
 
+/// Builds the WebSocket connector from the Windows trust store when available.
+/// Local TLS inspection roots remain subject to normal chain and hostname
+/// validation; other platforms keep whatsapp-rust's embedded public roots.
+fn app_tls_connector() -> Connector {
+    #[cfg(windows)]
+    {
+        static CRYPTO_PROVIDER_INIT: std::sync::Once = std::sync::Once::new();
+        CRYPTO_PROVIDER_INIT.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
+
+        let native = rustls_native_certs::load_native_certs();
+        let mut roots = rustls::RootCertStore::empty();
+        let mut added = 0;
+        for cert in native.certs {
+            if roots.add(cert).is_ok() {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            if !native.errors.is_empty() {
+                log::debug!(
+                    "Windows TLS root loading skipped {} unusable certificates",
+                    native.errors.len()
+                );
+            }
+            let mut config = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            config.resumption = rustls::client::Resumption::in_memory_sessions(16);
+            return Connector::Rustls(tokio_rustls::TlsConnector::from(Arc::new(config)));
+        }
+        log::warn!(
+            "Windows TLS root store had no usable certificates; using embedded public roots"
+        );
+    }
+
+    default_tls_connector()
+}
+
 /// Runs TLS and the WhatsApp WebSocket handshake over a connected `stream`,
 /// shared by the direct dial here and [`crate::proxy`].
 ///
@@ -252,7 +292,7 @@ pub async fn websocket(
     via: &str,
 ) -> Result<Link, anyhow::Error> {
     let stream = connector
-        .get_or_init(default_tls_connector)
+        .get_or_init(app_tls_connector)
         .wrap(host, stream)
         .await
         .map_err(|error| {

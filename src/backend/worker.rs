@@ -1537,18 +1537,17 @@ impl Worker {
         let builder = match crate::proxy::for_whatsapp() {
             Some(proxy) => {
                 log::info!("connecting through the proxy {}", proxy.redacted());
-                builder
-                    .with_transport_factory(crate::proxy::ProxyTransportFactory::new(proxy))
-                    .with_http_client(whatsapp_rust::http::UreqHttpClient::with_agent(
-                        crate::proxy::agent(),
-                    ))
+                builder.with_transport_factory(crate::proxy::ProxyTransportFactory::new(proxy))
             }
             // Every address the host resolves to is dialed, not only the first
             // one, so a network whose IPv6 does not answer still links over
             // IPv4 (#212).
             None => builder
                 .with_transport_factory(crate::transport::HappyEyeballsTransportFactory::new()),
-        };
+        }
+        .with_http_client(whatsapp_rust::http::UreqHttpClient::with_agent(
+            crate::proxy::agent(),
+        ));
         let bot = builder
             // WhatsApp reads the linked-device name, version, and icon at pairing.
             .with_device_props(
