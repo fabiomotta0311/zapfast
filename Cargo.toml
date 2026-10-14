@@ -37,9 +37,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 directories = "6"
-# UI framework. Vulkan WGPU avoids OpenGL hooks on Windows; keep glow for other platforms.
+# UI framework. D3D12 WGPU avoids OpenGL hooks on Windows; keep glow for other platforms.
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "wgpu_no_default_features", "default_fonts", "links", "wayland", "x11", "persistence"] }
-wgpu = { version = "30", default-features = false, features = ["vulkan"] }
+wgpu = { version = "30", default-features = false, features = ["dx12"] }
 egui = "0.36"
 egui_extras = { version = "0.36", features = ["file", "image", "svg", "webp", "gif"] }
 # Reads the colour emoji font's bitmaps for the demo tour's GIF fixtures. Keep
