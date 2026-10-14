@@ -85,10 +85,12 @@ pub fn acquire(dir: &Path, waker: &crate::backend::Waker, verb: &str) -> Outcome
             return Outcome::Unanswered;
         }
     };
-    if legacy_instance_answers(verb) {
+    if crate::paths::AppDirs::is_official() && legacy_instance_answers(verb) {
         return Outcome::Surfaced;
     }
-    listen_legacy(Arc::clone(&commands), waker.clone());
+    if crate::paths::AppDirs::is_official() {
+        listen_legacy(Arc::clone(&commands), waker.clone());
+    }
     Outcome::Only(Guard {
         commands,
         _claim: claim,
@@ -168,7 +170,8 @@ fn legacy_request(mut stream: TcpStream, verb: &str) -> std::io::Result<()> {
 
 /// Answers copies that predate the lock (0.15 and earlier), which only look
 /// for the fixed port: without a reply they would start beside this one on
-/// the same archive and linked device. Only `show` and `ping` are accepted
+/// the same archive and linked device. The port belongs to the official
+/// copy alone, so a flavour never binds it. Only `show` and `ping` are accepted
 /// there, as nothing on that port proves who is asking, and they at most
 /// bring the window forward.
 fn listen_legacy(commands: Queue, waker: crate::backend::Waker) {

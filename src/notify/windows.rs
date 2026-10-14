@@ -9,7 +9,13 @@ use windows_sys::Win32::System::Registry::{
 };
 use winrt_notification::{IconCrop, Toast};
 
-const APPLICATION_ID: &str = "me.paolino.zapfast";
+fn application_id() -> &'static str {
+    match crate::paths::AppDirs::profile_name() {
+        "zapfast-test" => "me.paolino.zapfast.test",
+        "zapfast-custom" => "me.paolino.zapfast.custom",
+        _ => "me.paolino.zapfast",
+    }
+}
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
@@ -17,7 +23,8 @@ fn wide(value: &str) -> Vec<u16> {
 
 fn register_identity() -> std::io::Result<()> {
     let path = wide(&format!(
-        r"Software\Classes\AppUserModelId\{APPLICATION_ID}"
+        r"Software\Classes\AppUserModelId\{}",
+        application_id()
     ));
     let name = wide("DisplayName");
     let value = wide("ZapFast");
@@ -46,7 +53,7 @@ fn register_identity() -> std::io::Result<()> {
 }
 
 fn notification(title: &str, body: &str, picture: Option<&Path>, system_sound: bool) -> Toast {
-    let toast = Toast::new(APPLICATION_ID).title(title).text1(body);
+    let toast = Toast::new(application_id()).title(title).text1(body);
     // Without the system sound the toast is silent; a custom sound is played
     // by ZapFast itself.
     let toast = if system_sound {
@@ -105,7 +112,7 @@ mod tests {
             .collect();
         assert_eq!(shortcuts.len(), 2);
         for shortcut in shortcuts {
-            assert!(shortcut.contains(&format!("AppUserModelID: \"{APPLICATION_ID}\"")));
+            assert!(shortcut.contains(&format!("AppUserModelID: \"{}\"", application_id())));
         }
     }
 }

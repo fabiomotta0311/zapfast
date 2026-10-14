@@ -595,6 +595,29 @@ full path, since a graphical session often lacks `~/.local/bin` on `PATH`. It
 is Linux-only; on macOS and Windows use a packaged release or run the binary
 directly.
 
+### Side-by-side local builds (Windows)
+
+The fork's `local-builds` branch supports two personal builds beside the
+already-installed official ZapFast:
+
+- `zapfast.exe` is the official installer-provided app and keeps its existing
+  data and linked-device session. It is not rebuilt for this workflow.
+- `zapfast_test.exe` is built from a PR branch and uses the isolated
+  `zapfast-test` profile.
+- `zapfast_custom.exe` is built from the personal `custom` branch and uses the
+  separate `zapfast-custom` profile.
+
+Both personal profiles isolate settings, encrypted archive, linked-device
+credentials, keyring entry, logs, media cache, single-instance lock, window
+identity, and notifications. They cannot adopt/migrate official data, register
+the official login-at-startup entry, or self-update. From the relevant source
+branch, run `bash scripts/build-local-variants.sh test` or `custom`; the script
+builds ZapFast once and copies it under the flavor-specific executable name.
+For remote Windows cross-builds on the VPS, use
+`bash scripts/build-vps-windows.sh <commit> {test|custom}`. It transfers only
+the committed source and returns the Windows executable under
+`target/vps-artifacts/<commit>/`.
+
 `whatsapp-rust` is pinned to a Git commit because version 0.7.0 on crates.io
 enables a `simd` feature that needs nightly Rust. The pinned commit builds on
 stable Rust and includes the upstream fixes for missing app-state snapshots and
