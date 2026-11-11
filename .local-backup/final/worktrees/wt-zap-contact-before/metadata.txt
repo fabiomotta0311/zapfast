@@ -1,0 +1,7 @@
+path=C:\Users\fabio\dev\zapfast\wt-zap-contact-before
+branch=
+head=3951f48cc3875c23d9e8c899dc4373d56b7ca289
+
+# branch.oid 3951f48cc3875c23d9e8c899dc4373d56b7ca289
+# branch.head (detached)
+1 .M N... 100644 100644 100644 3ca458d8f68069a6b8c3fdcb6b96f22fc87e5cec 3ca458d8f68069a6b8c3fdcb6b96f22fc87e5cec src/demo.rs

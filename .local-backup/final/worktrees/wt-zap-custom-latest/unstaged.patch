@@ -1,0 +1,400 @@
+diff --cc src/ui/chats.rs
+index e121dcb,51fd3f7..0000000
+--- a/src/ui/chats.rs
++++ b/src/ui/chats.rs
+@@@ -11,13 -11,14 +11,19 @@@ use super::focus::{Stop, TabStop}
+  use super::labels;
+  use super::widgets;
+  
+++<<<<<<< HEAD
+ +pub fn show(app: &mut App, ui: &mut egui::Ui) {
+ +    search_keyboard(app, ui);
+++=======
++ pub fn show(app: &mut App, ui: &mut egui::Ui, pane: usize) {
+++>>>>>>> 43a55e4 (feat: split the chat workspace into focused panes)
+      let palette = app.palette;
+-     let panel = egui::Panel::left("chats")
++     let panel = egui::Panel::left(egui::Id::new(("chats", pane)))
+          .resizable(true)
+          .default_size(app.settings.sidebar_width)
+-         .size_range(if theme::macos_chrome(ui.ctx()) {
++         .size_range(if app.split_open() {
++             180.0..=420.0
++         } else if theme::macos_chrome(ui.ctx()) {
+              (theme::traffic_light_inset(ui.ctx()) + 210.0).max(280.0)..=520.0
+          } else {
+              260.0..=520.0
+@@@ -33,68 -35,18 +40,68 @@@
+          app.settings.sidebar_width = width;
+          app.actions.push(Action::SettingsChanged);
+      }
+ -    // Separate the panel from the conversation.
+ -    let rect = response.response.rect;
+ -    ui.painter().vline(
+ -        rect.right(),
+ -        rect.y_range(),
+ -        egui::Stroke::new(1.0, palette.outline),
+ -    );
+ +    // Separate the panel from the conversation, as the header's line does.
+ +    widgets::paint_edge_beside(ui, &palette, response.response.rect);
+ +}
+ +
+ +/// Walks matching chats while the global search field keeps keyboard focus.
+ +/// Enter leaves search and opens the reached chat ready for typing.
+ +fn search_keyboard(app: &mut App, ui: &egui::Ui) {
+ +    let field = egui::Id::new("chat-search");
+ +    if app.search.trim().is_empty()
+ +        || app.locked_folder_open()
+ +        || app.secret_code_matched()
+ +        || !ui.memory(|memory| memory.has_focus(field))
+ +    {
+ +        return;
+ +    }
+ +    let (down, up, enter) = ui.input_mut(|input| {
+ +        (
+ +            super::keys::take_plain(input, Key::ArrowDown),
+ +            super::keys::take_plain(input, Key::ArrowUp),
+ +            super::keys::take_plain(input, Key::Enter),
+ +        )
+ +    });
+ +    if !down && !up && !enter {
+ +        return;
+ +    }
+ +    let chats: Vec<_> = app
+ +        .visible_chats()
+ +        .into_iter()
+ +        .map(|chat| chat.id.clone())
+ +        .collect();
+ +    if chats.is_empty() {
+ +        app.search_selected = None;
+ +        return;
+ +    }
+ +    let before = app.search_selected.clone();
+ +    let mut index = before
+ +        .as_ref()
+ +        .and_then(|selected| chats.iter().position(|chat| chat == selected));
+ +    if down {
+ +        index = Some(index.map_or(0, |index| (index + 1).min(chats.len() - 1)));
+ +    }
+ +    if up {
+ +        index = index.map(|index| index.saturating_sub(1));
+ +    }
+ +    app.search_selected = index.map(|index| chats[index].clone());
+ +    if app.search_selected != before {
+ +        app.scroll_chat_into_view.clone_from(&app.search_selected);
+ +    }
+ +    if enter {
+ +        let chat = app
+ +            .search_selected
+ +            .clone()
+ +            .unwrap_or_else(|| chats[0].clone());
+ +        ui.memory_mut(|memory| memory.surrender_focus(field));
+ +        app.actions.push(Action::Search(String::new()));
+ +        app.actions.push(Action::OpenChat(chat));
+ +    }
+  }
+  
+- fn header(app: &mut App, ui: &mut egui::Ui) {
++ fn header(app: &mut App, ui: &mut egui::Ui, pane: usize) {
+      if theme::macos_chrome(ui.ctx()) {
+-         macos_header(app, ui);
++         macos_header(app, ui, pane);
+          return;
+      }
+      let palette = app.palette;
+@@@ -258,12 -185,7 +266,16 @@@
+          });
+  }
+  
+++<<<<<<< HEAD
+ +/// Where the chat list header's first row was laid out, for layout tests.
+ +pub(crate) fn header_row_id() -> egui::Id {
+ +    egui::Id::new("chat-list-header-row")
+ +}
+ +
+ +fn macos_header(app: &mut App, ui: &mut egui::Ui) {
+++=======
++ fn macos_header(app: &mut App, ui: &mut egui::Ui, pane: usize) {
+++>>>>>>> 43a55e4 (feat: split the chat workspace into focused panes)
+      let palette = app.palette;
+      let inset = theme::traffic_light_inset(ui.ctx());
+      let mut drag = ui.max_rect();
+diff --cc src/ui/conversation.rs
+index b439352,37af00c..0000000
+--- a/src/ui/conversation.rs
++++ b/src/ui/conversation.rs
+@@@ -32,39 -30,98 +32,53 @@@ const NOT_SENT: &str = "Not sent"
+  const NOT_SENT_HINT: &str =
+      "This message could not be sent, and ZapFast will not retry it. Send it again yourself.";
+  
+- pub fn show(app: &mut App, ui: &mut egui::Ui) {
++ pub fn show(app: &mut App, ui: &mut egui::Ui, pane: usize) {
+      let Some(chat) = app.current_chat().cloned() else {
+++<<<<<<< HEAD
+ +        if theme::macos_chrome(ui.ctx()) {
+++=======
++         super::standalone_header(app, ui);
++         if pane == 0 && theme::macos_chrome(ui.ctx()) {
+++>>>>>>> 43a55e4 (feat: split the chat workspace into focused panes)
+              super::banner(app, ui);
+          }
+          empty(app, ui);
+          return;
+      };
+++<<<<<<< HEAD
+ +    wallpaper::paint(ui, &app.wallpaper());
+ +    let header = header(app, ui, &chat);
+ +    if theme::macos_chrome(ui.ctx()) {
+++=======
++     if app.settings.show_wallpaper {
++         wallpaper::paint(ui, app.settings.wallpaper_color_for(app.palette.dark));
++     }
++     header(app, ui, &chat, pane);
++     chat_search(app, ui);
++     if pane == 0 && theme::macos_chrome(ui.ctx()) {
+++>>>>>>> 43a55e4 (feat: split the chat workspace into focused panes)
+          super::banner(app, ui);
+      }
+-     composer(app, ui, &chat);
++     composer(app, ui, &chat, pane);
+      messages(app, ui, &chat);
+ -}
+ -
+ -/// Search within the open chat: the query, how many matches it has, and the
+ -/// buttons that walk them. Escape closes it, Enter goes forward.
+ -fn chat_search(app: &mut App, ui: &mut egui::Ui) {
+ -    if !app.chat_search_open {
+ -        return;
+ -    }
+ -    let palette = app.palette;
+ -    egui::Panel::top("chat-search")
+ -        .show_separator_line(false)
+ -        .frame(
+ -            Frame::new()
+ -                .fill(palette.panel)
+ -                .inner_margin(Margin::symmetric(14, 6)),
+ -        )
+ -        .show(ui, |ui| {
+ -            ui.horizontal(|ui| {
+ -                ui.set_min_height(HEADER_ROW);
+ -                let controls = 150.0;
+ -                let width = (ui.available_width() - controls).max(120.0);
+ -                let id = egui::Id::new("chat-search-in-chat");
+ -                let mut text = app.chat_search.clone();
+ -                let response = widgets::search_field(
+ -                    ui,
+ -                    &palette,
+ -                    id,
+ -                    &mut text,
+ -                    "Search in this chat",
+ -                    width,
+ -                );
+ -                if text != app.chat_search {
+ -                    app.actions.push(Action::ChatSearch(text));
+ -                }
+ -                if app.chat_search_focus {
+ -                    app.chat_search_focus = false;
+ -                    response.request_focus();
+ -                }
+ -                let total = app.chat_search_hits.len();
+ -                let position = if total == 0 {
+ -                    0
+ -                } else {
+ -                    app.chat_search_index + 1
+ -                };
+ -                ui.label(
+ -                    egui::RichText::new(format!("{position} / {total}")).color(palette.secondary),
+ -                );
+ -                if theme::icon_button(
+ -                    ui,
+ -                    Icon::ChevronUp,
+ -                    16.0,
+ -                    palette.secondary,
+ -                    palette.text,
+ -                    "Previous match (Shift+Enter)",
+ -                )
+ -                .clicked()
+ -                {
+ -                    app.actions.push(Action::StepChatSearch(-1));
+ -                }
+ -                if theme::icon_button(
+ -                    ui,
+ -                    Icon::ChevronDown,
+ -                    16.0,
+ -                    palette.secondary,
+ -                    palette.text,
+ -                    "Next match (Enter)",
+ -                )
+ -                .clicked()
+ -                {
+ -                    app.actions.push(Action::StepChatSearch(1));
+ -                }
+ -            });
+ -        });
+ +    // Over the messages, which scroll under the header.
+ +    widgets::paint_shadow_below(
+ +        ui,
+ +        &app.palette,
+ +        header.left(),
+ +        header.right(),
+ +        header.bottom(),
+ +    );
+ +    // The chat list, or its rail of avatars, stands at the header's level
+ +    // beside the conversation: it casts the same shadow across it, from
+ +    // under the header down.
+ +    widgets::paint_shadow_beside(
+ +        ui,
+ +        &app.palette,
+ +        header.left(),
+ +        header.bottom(),
+ +        ui.max_rect().bottom(),
+ +    );
+  }
+  
+  fn empty(app: &mut App, ui: &mut egui::Ui) {
+@@@ -110,10 -167,13 +124,20 @@@
+      }
+  }
+  
+++<<<<<<< HEAD
+ +fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
+ +    let palette = app.palette;
+ +    let title = app.chat_title(chat);
+ +    egui::Panel::top("chat-header")
+++=======
++ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat, pane: usize) {
++     let palette = app.palette;
++     let title = app.chat_title(chat);
++     // The collapsed list has its own show button and clears the traffic
++     // lights itself; only a fully hidden list leaves both to the header.
++     let sidebar_hidden = app.sidebar_mode() == crate::model::SidebarDisplayMode::Hidden;
++     egui::Panel::top(egui::Id::new(("chat-header", pane)))
+++>>>>>>> 43a55e4 (feat: split the chat workspace into focused panes)
+          .show_separator_line(false)
+          .frame(
+              Frame::new()
+diff --cc src/ui/labels.rs
+index 21415b8,cac13ab..0000000
+--- a/src/ui/labels.rs
++++ b/src/ui/labels.rs
+@@@ -88,7 -88,50 +88,54 @@@ fn active_label(app: &App) -> Option<St
+      app.label_filter.clone()
+  }
+  
+++<<<<<<< HEAD
+ +/// A row of label chips under the built-in ones, once there is a label.
+++=======
++ /// Tabs used by the split workspace. Ctrl-clicking a tab opens it beside the
++ /// current pane; a normal click changes only that pane.
++ pub fn tab_bar(app: &mut App, ui: &mut egui::Ui, pane: usize, palette: &Palette) {
++     if !app.split_open() || app.show_archived || app.locked_folder_open() || app.labels.is_empty() {
++         return;
++     }
++     ui.add_space(3.0);
++     egui::ScrollArea::horizontal()
++         .id_salt(("workspace-tabs", pane))
++         .auto_shrink([false, true])
++         .show(ui, |ui| {
++             ui.horizontal(|ui| {
++                 let active = app.panes[pane].label.as_deref();
++                 let mut pick = None;
++                 let all = widgets::filter_chip(ui, palette, "All", 0, active.is_none());
++                 if all.clicked() {
++                     pick = Some(None);
++                 }
++                 for label in app.labels.clone() {
++                     let button = widgets::filter_chip(
++                         ui,
++                         palette,
++                         &label.name,
++                         0,
++                         active == Some(label.id.as_str()),
++                     );
++                     if button.clicked() {
++                         let modifiers = ui.ctx().input(|input| input.modifiers);
++                         if pane == 0 && (modifiers.ctrl || modifiers.command) {
++                             app.actions.push(Action::OpenLabelSplit(Some(label.id)));
++                         } else {
++                             pick = Some(Some(label.id));
++                         }
++                     }
++                 }
++                 if let Some(label) = pick {
++                     app.actions.push(Action::SelectPaneLabel { pane, label });
++                 }
++             });
++         });
++ }
++ 
++ /// A row of label chips under the built-in ones, with
++ /// [`Settings::label_chips`](crate::settings::Settings::label_chips) on.
+++>>>>>>> 43a55e4 (feat: split the chat workspace into focused panes)
+  ///
+  /// The row has no All chip of its own: a label is one more choice beside the
+  /// built-in chips, so picking it lets go of them, picking one of them lets go
+diff --cc src/ui/mod.rs
+index 3c44938,991cfc8..0000000
+--- a/src/ui/mod.rs
++++ b/src/ui/mod.rs
+@@@ -46,12 -36,15 +46,18 @@@ pub fn show(app: &mut App, ui: &mut egu
+          && app.reaction_target.is_none()
+          && app.recording.is_none()
+          && app.image_preview.is_none()
+ +        && !app.video_expanded
+          && app.emoji_start.is_none()
+          && app.mention_start.is_none()
+ +        // The day filter keeps egui's own order among its days.
+ +        && !app.chat_search_calendar
+          && !egui::Popup::is_any_open(ctx);
++     if !app.split_open() {
++         app.panes[0].chat = app.open_chat.clone();
++         app.panes[0].label = app.label_filter.clone();
++     }
++     app.open_chat = app.panes[app.focused_pane].chat.clone();
++     app.pane_label = app.panes[app.focused_pane].label.clone();
+      focus::begin(ctx, main_navigation);
+      // The open chat's composer records its rect again below, if there is one.
+      ctx.data_mut(|data| data.remove::<egui::Rect>(composer_rect_id()));
+@@@ -68,21 -61,24 +74,42 @@@
+      if !macos {
+          banner(app, ui);
+      }
+++<<<<<<< HEAD
+ +    match app.sidebar_mode() {
+ +        SidebarDisplayMode::Expanded => chats::show(app, ui),
+ +        SidebarDisplayMode::CollapsedIconsOnly => chats::compact_show(app, ui),
+ +    }
+ +    let search_overlay = pane::show(app, ui);
+ +    egui::CentralPanel::default()
+ +        .frame(central_frame(app))
+ +        .show(ui, |ui| match app.page {
+ +            Page::Settings => settings::show(app, ui),
+ +            Page::Chats => conversation::show(app, ui),
+ +            Page::Wallpaper => settings::wallpaper_show(app, ui),
+ +        });
+ +    if let Some(region) = search_overlay {
+ +        pane::show_overlay(app, ctx, region);
+ +    }
+++=======
++     if app.split_open() {
++         egui::CentralPanel::default()
++             .frame(central_frame(app))
++             .show(ui, |ui| workspace(app, ui));
++     } else {
++         match app.sidebar_mode() {
++             SidebarDisplayMode::Expanded => chats::show(app, ui, 0),
++             SidebarDisplayMode::CollapsedIconsOnly => chats::compact_show(app, ui),
++             SidebarDisplayMode::Hidden => {}
++         }
++         egui::CentralPanel::default()
++             .frame(central_frame(app))
++             .show(ui, |ui| match app.page {
++                 Page::Settings => settings::show(app, ui),
++                 Page::Chats => conversation::show(app, ui, 0),
++                 Page::Wallpaper => settings::wallpaper_show(app, ui),
++             });
++     }
+++>>>>>>> 43a55e4 (feat: split the chat workspace into focused panes)
+      focus::finish(ctx, main_navigation);
+      update::show(app, ctx);
+      picker::show(app, ctx);
