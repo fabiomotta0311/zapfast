@@ -1,0 +1,366 @@
+* Unmerged path assets/i18n/de.po
+* Unmerged path assets/i18n/es.po
+* Unmerged path assets/i18n/fr.po
+* Unmerged path assets/i18n/it.po
+* Unmerged path assets/i18n/pt-BR.po
+* Unmerged path assets/i18n/ru.po
+* Unmerged path assets/i18n/tr.po
+* Unmerged path assets/i18n/zapfast.pot
+* Unmerged path assets/i18n/zh-Hans.po
+* Unmerged path src/app.rs
+diff --git a/src/backend.rs b/src/backend.rs
+index 9617132..0b2d02f 100644
+--- a/src/backend.rs
++++ b/src/backend.rs
+@@ -168,6 +168,9 @@ pub enum Command {
+         latitude: f64,
+         longitude: f64,
+         quoting: Option<String>,
++        /// Counts location sends, so a refusal answers the one it was made
++        /// for and not a later one.
++        generation: u64,
+     },
+     ReplyInteractive {
+         chat: ChatId,
+@@ -1010,10 +1013,13 @@ pub enum Refusal {
+ pub enum Unsent {
+     /// Composer text in wire form, with `@user` mention tokens.
+     Text(String),
+-    /// The spot a location was to send, so the dialog can come back with it.
++    /// The spot a location was to send, so the dialog can come back with it,
++    /// and the send's generation, so a refusal for a spot the reader has
++    /// since replaced changes nothing.
+     Location {
+         latitude: f64,
+         longitude: f64,
++        generation: u64,
+     },
+     Voice(Vec<f32>),
+     Files {
+diff --git a/src/backend/worker.rs b/src/backend/worker.rs
+index 4f259a0..85bd4ca 100644
+--- a/src/backend/worker.rs
++++ b/src/backend/worker.rs
+@@ -4547,7 +4547,8 @@ impl Worker {
+                 latitude,
+                 longitude,
+                 quoting,
+-            } => self.send_location(chat, latitude, longitude, quoting),
++                generation,
++            } => self.send_location(chat, latitude, longitude, quoting, generation),
+             Command::ReplyInteractive {
+                 chat,
+                 message,
+@@ -6237,10 +6238,12 @@ impl Worker {
+         latitude: f64,
+         longitude: f64,
+         quoting: Option<String>,
++        generation: u64,
+     ) {
+         let unsent = || Unsent::Location {
+             latitude,
+             longitude,
++            generation,
+         };
+         let (context, shown) = match self.quote(&chat, quoting.as_deref()) {
+             Ok(Some((context, shown))) => (Some(context), Some(shown)),
+@@ -11213,6 +11216,7 @@ mod tests {
+                 latitude: -23.5505,
+                 longitude: -46.6333,
+                 quoting: None,
++                generation: 7,
+             })
+             .await;
+         if let Event::SendRefused {
+@@ -11220,6 +11224,7 @@ mod tests {
+                 Unsent::Location {
+                     latitude,
+                     longitude,
++                    generation,
+                 },
+             reason,
+             ..
+@@ -11227,6 +11232,9 @@ mod tests {
+         {
+             assert_eq!(latitude, -23.5505);
+             assert_eq!(longitude, -46.6333);
++            // The refusal names the send it answers, so the app can tell a
++            // late answer from one that is still wanted.
++            assert_eq!(generation, 7);
+             assert_eq!(reason, Refusal::Offline);
+         } else {
+             panic!("a refusal carries the spot back to the dialog");
+diff --git a/src/geo.rs b/src/geo.rs
+index af44b89..c059c92 100644
+--- a/src/geo.rs
++++ b/src/geo.rs
+@@ -49,27 +49,81 @@ pub fn map_url(spot: Spot) -> String {
+     )
+ }
+ 
++/// The map a link names, so each provider's own conventions are read only
++/// where that provider writes them and an unrelated address is refused
++/// rather than guessed at.
++#[derive(Clone, Copy, PartialEq)]
++enum Provider {
++    Google,
++    Apple,
++    OpenStreetMap,
++}
++
++/// Reads the map a link's host names, or `None` when it names none: the
++/// dialog promises supported map links, and a spot pinned out of an
++/// unrelated URL would be a guess the reader never sees.
++fn provider(url: &reqwest::Url) -> Option<Provider> {
++    let host = url.host_str()?.to_ascii_lowercase();
++    let host = host.strip_prefix("www.").unwrap_or(&host);
++    // Google serves each country from its own domain, so the label is what
++    // identifies it, and its links come from `maps.google.com` and short
++    // hosts alike.
++    if host == "google.com"
++        || host.ends_with(".google.com")
++        || host.split('.').next() == Some("google")
++    {
++        Some(Provider::Google)
++    } else if host == "apple.com" || host.ends_with(".apple.com") {
++        Some(Provider::Apple)
++    } else if host == "openstreetmap.org" || host.ends_with(".openstreetmap.org") {
++        Some(Provider::OpenStreetMap)
++    } else {
++        None
++    }
++}
++
+ /// Reads a link to a spot: Google Maps, Apple Maps, OpenStreetMap, and any
+ /// `geo:` URI. Google's place markers name the exact spot, so they win over the
+ /// viewport around them.
+ fn link(text: &str) -> Option<Spot> {
+     let url = reqwest::Url::parse(text).ok()?;
+     if url.scheme() == "geo" {
+-        return two(url.path());
++        // A `geo:` URI may carry standard parameters after the coordinates,
++        // as in `geo:0,0;u=35`, which name no spot of their own.
++        let coordinates = url.path().split(';').next().unwrap_or(url.path());
++        return two(coordinates);
+     }
+     if !matches!(url.scheme(), "http" | "https") {
+         return None;
+     }
+-    if let Some(marked) = marked_place(text) {
+-        return Some(marked);
++    match provider(&url)? {
++        Provider::Google => marked_place(text)
++            .or_else(|| url.path().split_once("/@").and_then(|(_, rest)| two(rest)))
++            .or_else(|| {
++                query_spot(
++                    &url,
++                    &[
++                        "q",
++                        "ll",
++                        "query",
++                        "daddr",
++                        "destination",
++                        "center",
++                        "loc",
++                        "sll",
++                    ],
++                )
++            }),
++        Provider::Apple => query_spot(
++            &url,
++            &["ll", "q", "sll", "center", "query", "daddr", "destination"],
++        ),
++        // The `mlat`/`mlon` pair is the marker itself, so it is read before
++        // the viewport the fragment describes.
++        Provider::OpenStreetMap => osm_marker(&url)
++            .or_else(|| url.fragment().and_then(openstreetmap_position))
++            .or_else(|| query_spot(&url, &["ll", "q", "sll"])),
+     }
+-    if let Some(viewport) = url.path().split_once("/@").and_then(|(_, rest)| two(rest)) {
+-        return Some(viewport);
+-    }
+-    // A `mlat`/`mlon` pair, or a `q=`/`ll=` naming coordinates, is the marker
+-    // itself, so it is read before the viewport an OpenStreetMap fragment
+-    // describes.
+-    query_spot(&url).or_else(|| url.fragment().and_then(openstreetmap_position))
+ }
+ 
+ /// Reads the `!3d<latitude>!4d<longitude>` markers a Google Maps link carries.
+@@ -97,21 +151,15 @@ fn openstreetmap_position(fragment: &str) -> Option<Spot> {
+     joined(parts.next()?, parts.next()?)
+ }
+ 
+-/// Reads a spot out of a link's query: `q`, `ll`, `query`, `daddr`,
+-/// `destination`, `center`, `loc` or `sll` naming the coordinates, or
+-/// OpenStreetMap's `mlat` and `mlon` pair.
+-fn query_spot(url: &reqwest::Url) -> Option<Spot> {
++/// Reads OpenStreetMap's own `mlat` and `mlon` pair, the marker its links
++/// carry before the `#map=` viewport.
++fn osm_marker(url: &reqwest::Url) -> Option<Spot> {
+     let mut latitude = None;
+     let mut longitude = None;
+     for (key, value) in url.query_pairs() {
+         match key.as_ref() {
+             "mlat" => latitude = number(&value),
+             "mlon" => longitude = number(&value),
+-            "q" | "ll" | "query" | "daddr" | "destination" | "center" | "loc" | "sll" => {
+-                if let Some(spot) = pair(&value) {
+-                    return Some(spot);
+-                }
+-            }
+             _ => {}
+         }
+     }
+@@ -121,6 +169,20 @@ fn query_spot(url: &reqwest::Url) -> Option<Spot> {
+     })
+ }
+ 
++/// Reads a spot out of a link's query, under the keys `keys` names. Each map
++/// writes its marker under its own key, and a value that is not a pair of
++/// coordinates is a place name, which this refuses.
++fn query_spot(url: &reqwest::Url, keys: &[&str]) -> Option<Spot> {
++    for (key, value) in url.query_pairs() {
++        if keys.contains(&key.as_ref())
++            && let Some(spot) = pair(&value)
++        {
++            return Some(spot);
++        }
++    }
++    None
++}
++
+ /// Reads the first two comma-separated numbers of a chunk, which is how a
+ /// link's own `latitude,longitude,zoom` carries them.
+ fn two(chunk: &str) -> Option<Spot> {
+@@ -302,6 +364,47 @@ mod tests {
+         assert_eq!(spot("https://www.openstreetmap.org/way/123"), None);
+     }
+ 
++    /// A `geo:` URI may carry standard parameters after the coordinates, as
++    /// in `;u=40`. They name no spot, so the coordinate component alone is
++    /// read.
++    #[test]
++    fn a_geo_uri_is_read_before_its_parameters() {
++        assert_eq!(spot_of("geo:-23.5505,-46.6333;u=40"), (-23.5505, -46.6333));
++        assert_eq!(spot_of("geo:0,0;crs=wgs84;u=35"), (0.0, 0.0));
++    }
++
++    /// The dialog promises supported map links, so each map's own syntax is
++    /// read on that map and nowhere else: an unrelated URL must not be able to
++    /// pin coordinates.
++    #[test]
++    fn an_unrelated_address_cannot_pin_a_spot() {
++        assert_eq!(spot("https://example.com/?q=12,34"), None);
++        assert_eq!(spot("https://example.com/?ll=12,34"), None);
++        assert_eq!(spot("https://example.com/?mlat=12&mlon=34"), None);
++        // Google's markers and viewport are Google's, not everyone's.
++        assert_eq!(spot("https://example.com/maps/@12,34,15z"), None);
++        assert_eq!(spot("https://example.com/place/X/data=!3d12!4d34"), None);
++        // A coordinate pair in an OpenStreetMap fragment is OpenStreetMap's.
++        assert_eq!(spot("https://example.com/#map=15/12/34"), None);
++    }
++
++    /// Each supported map keeps reading its own links the way it did.
++    #[test]
++    fn every_supported_map_still_reads_its_own_links() {
++        assert_eq!(
++            spot_of("https://www.google.com.br/maps/place/X/data=!3d-23.5505!4d-46.6333"),
++            (-23.5505, -46.6333)
++        );
++        assert_eq!(
++            spot_of("https://maps.apple.com/?ll=-23.5505,-46.6333"),
++            (-23.5505, -46.6333)
++        );
++        assert_eq!(
++            spot_of("https://www.openstreetmap.org/?mlat=-23.5505&mlon=-46.6333"),
++            (-23.5505, -46.6333)
++        );
++    }
++
+     /// The link the card opens is one the reader can paste back in.
+     #[test]
+     fn the_map_link_round_trips_through_the_reader() {
+diff --git a/src/ui/conversation.rs b/src/ui/conversation.rs
+index 10cecc4..5241597 100644
+--- a/src/ui/conversation.rs
++++ b/src/ui/conversation.rs
+@@ -4714,17 +4714,14 @@ fn content(
+             let title = name
+                 .clone()
+                 .unwrap_or_else(|| crate::i18n::gettext(view.locale, "Location").into_owned());
+-            // A spot sent from here names no place, so the coordinates take the
+-            // line an address would.
+-            let detail = address.clone().or_else(|| {
+-                Some(
+-                    Spot {
+-                        latitude: *latitude,
+-                        longitude: *longitude,
+-                    }
+-                    .text(),
+-                )
+-            });
++            let detail = location_detail(
++                address.as_deref(),
++                Spot {
++                    latitude: *latitude,
++                    longitude: *longitude,
++                },
++                own,
++            );
+             location_card(
+                 ui,
+                 view,
+@@ -5786,6 +5783,16 @@ fn preview_card(
+     }
+ }
+ 
++/// The line under a location card's title: the address the sender supplied, or
++/// the coordinates of a spot sent from here, which names no place and carries
++/// no address. A received card keeps the address it came with and gains none,
++/// so only a locally sent location falls back to its own coordinates.
++fn location_detail(address: Option<&str>, spot: Spot, from_me: bool) -> Option<String> {
++    address
++        .map(str::to_owned)
++        .or_else(|| from_me.then(|| spot.text()))
++}
++
+ /// A location as a card: the map preview WhatsApp sent across the top, then
+ /// a pinned title, an optional detail line, and a link to open the spot.
+ #[expect(clippy::too_many_arguments)]
+@@ -7383,6 +7390,36 @@ mod tests {
+         );
+     }
+ 
++    /// A spot sent from here names no place and carries no address, so its own
++    /// coordinates take the address line. A received card must not change: it
++    /// keeps whatever address the sender gave it, and gains none.
++    #[test]
++    fn only_a_locally_sent_location_falls_back_to_its_coordinates() {
++        let here = Spot {
++            latitude: -23.5505,
++            longitude: -46.6333,
++        };
++        assert_eq!(
++            location_detail(None, here, true).as_deref(),
++            Some("-23.55050, -46.63330"),
++            "a spot sent from here shows where it is"
++        );
++        assert_eq!(
++            location_detail(None, here, false),
++            None,
++            "a received address-less card is left exactly as it was"
++        );
++        // An address is the sender's, on either side, and always wins.
++        assert_eq!(
++            location_detail(Some("Av Paulista"), here, true).as_deref(),
++            Some("Av Paulista")
++        );
++        assert_eq!(
++            location_detail(Some("Av Paulista"), here, false).as_deref(),
++            Some("Av Paulista")
++        );
++    }
++
+     #[test]
+     fn shared_contact_details_use_the_first_vcard_when_multiple_contacts_are_shared() {
+         assert_eq!(

@@ -1,0 +1,30 @@
+diff --git a/src/demo.rs b/src/demo.rs
+index 3ca458d..e264974 100644
+--- a/src/demo.rs
++++ b/src/demo.rs
+@@ -1550,6 +1550,25 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
+         match part {
+             "chat" | "" => {}
+             "chat-menu" => app.open_chat_menu = Some(app.chats[0].id.clone()),
++            "shared-contact" => {
++                let chat = SAMPLES[0].id;
++                let now = crate::util::now();
++                app.conversations
++                    .entry(chat.into())
++                    .or_default()
++                    .messages
++                    .push(message(
++                        chat,
++                        "shared-contact",
++                        false,
++                        now,
++                        Content::Contact {
++                            display_name: "Contact from sender".into(),
++                            vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:Jordan Rivera\nTEL;TYPE=CELL:+155****2222\nEND:VCARD".into(),
++                        },
++                    ));
++                app.open_chat = Some(chat.into());
++            }
+             "interactive-actions" => interactive_actions_sample(app),
+             "interactive-list" => interactive_list_sample(app),
+             "interactive-list-dialog" => {
